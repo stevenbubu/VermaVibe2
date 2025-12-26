@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>圖片完整呈現頁面</title>
+  <title>圖片完整呈現頁面（點擊下一張）</title>
   <style>
     html, body {
       height: 100%;
@@ -17,23 +17,88 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      /* 讓整個區域都能接收點擊 */
+      cursor: pointer;
+      user-select: none;
     }
     .fullscreen img {
       max-width: 100vw;
       max-height: 100vh;
       width: auto;
       height: auto;
-      object-fit: contain;      /* 完整顯示，不裁切 */
+      object-fit: contain; /* 完整顯示，不裁切 */
+      background: #000;
+    }
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: 16px;
+      transform: translateX(-50%);
+      color: #fff;
+      font: 14px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Microsoft JhengHei", sans-serif;
+      opacity: .7;
+      text-align: center;
     }
   </style>
 </head>
 <body>
-  <div class="fullscreen">
-    <img src="images/VermaVibe_20251217/1.PNG" alt="1" </div>
-    <img src="images/VermaVibe_20251217/2.PNG" alt="2" </div>
-    <img src="images/VermaVibe_20251217/3.PNG" alt="3" </div>
-    <img src="images/VermaVibe_20251217/4.PNG" alt="4" </div>
-    <img src="images/VermaVibe_20251217/5.PNG" alt="5" </div>
+  <div class="fullscreen" id="stage">
+    <!-- 只保留一個 img，透過 JS 更換 src -->
+    images/VermaVibe_20251217/1.PNG
   </div>
+  <div class="hint">點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動</div>
+
+  <script>
+    // 👉 把你的圖片列表放在這裡（路徑需正確、大小寫敏感）
+    const images = [
+      "images/VermaVibe_20251217/1.PNG",
+      "images/VermaVibe_20251217/2.PNG",
+      "images/VermaVibe_20251217/3.PNG",
+      "images/VermaVibe_20251217/4.PNG",
+      "images/VermaVibe_20251217/5.PNG"
+    ];
+
+    let index = 0;
+    const imgEl = document.getElementById("viewer");
+    const stageEl = document.getElementById("stage");
+
+    // 顯示指定索引的圖片
+    function show(i) {
+      index = (i + images.length) % images.length; // 循環
+      imgEl.src = images[index];
+      imgEl.alt = String(index + 1);
+
+      // 預先載入下一張，加速切換
+      const pre = new Image();
+      pre.src = images[(index + 1) % images.length];
+    }
+
+    // 滑鼠點擊：下一張
+    stageEl.addEventListener("click", () => show(index + 1));
+
+    // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") show(index - 1);
+      if (e.key === "ArrowRight") show(index + 1);
+      if (e.key === "Home") show(0);
+      if (e.key === "End") show(images.length - 1);
+    });
+
+    // 觸控滑動（手機）：右滑上一張、左滑下一張
+    let startX = null;
+    stageEl.addEventListener("touchstart", (e) => {
+      startX = e.touches[0].clientX;
+    });
+    stageEl.addEventListener("touchend", (e) => {
+      if (startX === null) return;
+      const dx = e.changedTouches[0].clientX - startX;
+      if (dx > 50) show(index - 1);
+      if (dx < -50) show(index + 1);
+      startX = null;
+    });
+
+    // 初始化
+    show(0);
+  </script>
 </body>
 </html>
