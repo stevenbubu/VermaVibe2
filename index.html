@@ -3,117 +3,143 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>圖片完整呈現頁面（點擊下一張）</title>
+    <title>投影片展示（淡入切換）</title>
     <style>
-      inset: 0;      html, body {
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #000;
+      }
+      .stage {
+        position: fixed;
+        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        cursor: pointer;    /* 讓整個區域都能接收點擊 */
+        cursor: pointer;
         user-select: none;
       }
-
-      .fullscreen img {
+      .slide {
+        position: absolute;
+        inset: 0;
+        margin: auto; /* 讓圖片區塊在容器置中 */
         max-width: 100vw;
         max-height: 100vh;
-        width: auto;
-        height: auto;
-        object-fit: contain; /* 完整顯示，不裁切 */
+        object-fit: contain; /* 等比完整呈現 */
         background: #000;
+        opacity: 0; /* 預設不可見 */
+        transition: opacity 0.4s ease; /* ✅ 淡入動畫 */
       }
-
+      .slide.active {
+        opacity: 1;
+      } /* 目前可見的那張 */
       .hint {
         position: fixed;
         left: 50%;
         bottom: 16px;
         transform: translateX(-50%);
         color: #fff;
-        font: 14px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans",
-          "Microsoft JhengHei", sans-serif;
-        opacity: 0.7;
+        font: 14px/1.6 system-ui, "Microsoft JhengHei", sans-serif;
+        opacity: 0.8;
         text-align: center;
-        transition: opacity 0.3s ease; /* ✅ 淡出動畫 */
+        transition: opacity 0.3s ease;
+      }
+      .hint.hidden {
+        opacity: 0;
+        pointer-events: none;
       }
 
-      .hint.hidden { opacity: 0; pointer-events: none; } /* ✅ 隱藏狀態 */
+      /* 尊重使用者減少動畫的偏好 */
+      @media (prefers-reduced-motion: reduce) {
+        .slide {
+          transition: none !important;
+        }
+        .hint {
+          transition: none !important;
+        }
+      }
     </style>
   </head>
-
   <body>
-    <div class="fullscreen" id="stage">
-      <!-- 只保留一個 img，透過 JS 更換 src -->
-      <img id="viewer" src="images/VermaVibe_20251217/1.PNG" alt="frontpage"在 JS 控制 -->
-    <div class="hint" id="hint">點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動</div>
+    <div class="stage" id="stage">
+      <!-- 雙緩衝：兩張疊在一起交叉淡入 -->
+      <img id="a" class="slide active" src="images/VermaVibe_20251217/01.webp"
+      alt=" alt="next">
+    </div>
+    <div class="hint" id="hint">
+      點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動
+    </div>
 
     <script>
-      // 👉 把你的圖片列表放在這裡（路徑需正確、大小寫敏感）
-      const images = [
-        "images/VermaVibe_20251217/1.PNG",
-        "images/VermaVibe_20251217/2.PNG",
-        "images/VermaVibe_20251217/3.PNG",
-        "images/VermaVibe_20251217/4.PNG",
-        "images/VermaVibe_20251217/5.PNG",
-        "images/VermaVibe_20251217/6.PNG",
-        "images/VermaVibe_20251217/7.PNG",
-        "images/VermaVibe_20251217/8.PNG",
-        "images/VermaVibe_20251217/9.PNG",
-        "images/VermaVibe_20251217/10.PNG",
-        "images/VermaVibe_20251217/11.PNG",
-        "images/VermaVibe_20251217/12.PNG",
-      ];
+      // 如果你用連號命名，直接自動產生清單（改 count 即可）
+      const count = 12;
+      const images = Array.from(
+        { length: count },
+        (_, i) =>
+          `images/VermaVibe_20251217/${String(i + 1).padStart(2, "0")}.webp`
+      );
 
-      let index = 0;
-      const imgEl   = document.getElementById("viewer");
-      const stageEl = document.getElementById("stage");
-      const hintEl  = document.getElementById("hint");
+      let idx = 0;
+      const a = document.getElementById("a");
+      const b = document.getElementById("b");
+      const stage = document.getElementById("stage");
+      const hint = document.getElementById("hint");
 
-      // 顯示指定索引的圖片
       function show(i) {
-        index = (i + images.length) % images.length; // 循環
-        imgEl.src = images[index];
-        imgEl.alt = String(index + 1);
+        const next = (i + images.length) % images.length;
+        const visible = a.classList.contains("active") ? a : b; // 目前顯示的
+        const hidden = visible === a ? b : a; // 用來載入下一張
 
-        // ✅ 第一張顯示提示；第二張開始隱藏
-        if (index === 0) {
-          hintEl.classList.remove("hidden");
-        } else {
-          hintEl.classList.add("hidden");
-        }
+        // 第一張顯示提示；第二張開始隱藏
+        if (next === 0) hint.classList.remove("hidden");
+        else hint.classList.add("hidden");
 
-        // 預先載入下一張，加速切換
-        const pre = new Image();
-        pre.src = images[(index + 1) % images.length];
+        // 先把下一張載到 hidden，載入完成後交叉淡入
+        const url = images[next];
+        hidden.style.opacity = 0; // 確保是隱藏狀態
+        hidden.src = url + ""; // 可加版本參數破快取 ?v=20251226
+        hidden.alt = `slide ${next + 1}`;
+        hidden.onload = () => {
+          visible.classList.remove("active"); // 目前那張淡出
+          hidden.classList.add("active"); // 下一張淡入
+          idx = next;
+
+          // 預載下一張，讓切換更順
+          const pre = new Image();
+          pre.src = images[(idx + 1) % images.length];
+        };
+        hidden.onerror = () => {
+          console.error("載入失敗：", url);
+        };
       }
 
-      // 滑鼠點擊：下一張
-      stageEl.addEventListener("click", () => show(index + 1));
+      // 點擊下一張
+      stage.addEventListener("click", () => show(idx + 1));
 
       // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張
       document.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowLeft") show(index - 1);
-        if (e.key === "ArrowRight") show(index + 1);
+        if (e.key === "ArrowLeft") show(idx - 1);
+        if (e.key === "ArrowRight") show(idx + 1);
         if (e.key === "Home") show(0);
         if (e.key === "End") show(images.length - 1);
       });
 
-      // 觸控滑動（手機）：右滑上一張、左滑下一張
+      // 手機滑動：右滑上一張、左滑下一張
       let startX = null;
-      stageEl.addEventListener("touchstart", (e) => {
+      stage.addEventListener("touchstart", (e) => {
         startX = e.touches[0].clientX;
       });
-      stageEl.addEventListener("touchend", (e) => {
+      stage.addEventListener("touchend", (e) => {
         if (startX === null) return;
         const dx = e.changedTouches[0].clientX - startX;
-        if (dx > 50) show(index - 1);
-        if (dx < -50) show(index + 1);
+        if (dx > 50) show(idx - 1);
+        if (dx < -50) show(idx + 1);
         startX = null;
       });
 
-      // 初始化（顯示第一張，提示可見）
-      show(0);
-
-      // （可選）即使停在第一張，提示也在 3 秒後淡出一次
-      // setTimeout(() => hintEl.classList.add("hidden"), 3000);
+      // 初始預載第 2 張
+      new Image().src = images[1 % images.length];
     </script>
   </body>
 </html>
