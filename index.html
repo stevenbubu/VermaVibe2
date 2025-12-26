@@ -38,7 +38,9 @@
       font: 14px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Microsoft JhengHei", sans-serif;
       opacity: .7;
       text-align: center;
+      transition: opacity .3s ease; /* ✅ 淡出動畫 */
     }
+    .hint.hidden { opacity: 0; pointer-events: none; } /* ✅ 隱藏狀態 */
   </style>
 </head>
 <body>
@@ -75,6 +77,15 @@
       index = (i + images.length) % images.length; // 循環
       imgEl.src = images[index];
       imgEl.alt = String(index + 1);
+
+      
+    // ✅ 第一張顯示提示；第二張開始隱藏
+    if (index === 0) {
+        hintEl.classList.remove("hidden");
+    } else {
+        hintEl.classList.add("hidden");
+    }
+
 
       // 預先載入下一張，加速切換
       const pre = new Image();
