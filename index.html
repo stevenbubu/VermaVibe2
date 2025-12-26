@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>點擊下一張 (ver 0.0.20)</title>
+    <title>點擊下一張 (ver 0.0.21)</title>
     <style>
       html,
       body {
@@ -17,23 +17,18 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        cursor: pointer;
+        cursor: pointer; /* 整個區域都可點 */
         user-select: none;
       }
+      /* 單一圖片，無任何淡入效果 */
       .slide {
-        position: absolute;
-        inset: 0;
-        margin: auto; /* 讓圖片區塊在容器置中 */
         max-width: 100vw;
         max-height: 100vh;
-        object-fit: contain; /* 等比完整呈現 */
+        width: auto;
+        height: auto;
+        object-fit: contain; /* 完整呈現不裁切 */
         background: #000;
-        opacity: 0; /* 預設不可見 */
-        transition: opacity 0.4s ease; /* ✅ 淡入動畫 */
       }
-      .slide.active {
-        opacity: 1;
-      } /* 目前可見的那張 */
       .hint {
         position: fixed;
         left: 50%;
@@ -50,11 +45,8 @@
         pointer-events: none;
       }
 
-      /* 尊重使用者減少動畫的偏好 */
+      /* 尊重使用者減少動畫偏好（這裡只影響 hint） */
       @media (prefers-reduced-motion: reduce) {
-        .slide {
-          transition: none !important;
-        }
         .hint {
           transition: none !important;
         }
@@ -63,21 +55,15 @@
   </head>
   <body>
     <div class="stage" id="stage">
-      <!-- 雙緩衝：兩張疊在一起交叉淡入 -->
-      <img
-        id="a"
-        class="slide"
-        src="images/VermaVibe_20251217/1.PNG"
-        alt="next"
-      />
-      <img id="b" class="slide" src="" alt="next" />
+      <!-- ✅ 單一 img，透過 JS 直接更換 src -->
+      images/VermaVibe_20251217/1.PNG
     </div>
     <div class="hint" id="hint">
       點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動
     </div>
 
     <script>
-      // 如果你用連號命名，直接自動產生清單（改 count 即可）
+      // 👉 依你的檔名生成清單（若是 01.PNG 需改用 padStart）
       const count = 12;
       const images = Array.from(
         { length: count },
@@ -85,37 +71,25 @@
       );
 
       let idx = 0;
-      const a = document.getElementById("a");
-      const b = document.getElementById("b");
+      const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
 
       function show(i) {
-        const next = (i + images.length) % images.length;
-        const visible = a.classList.contains("active") ? a : b; // 目前顯示的
-        const hidden = visible === a ? b : a; // 用來載入下一張
+        idx = (i + images.length) % images.length;
+        const url = images[idx];
 
         // 第一張顯示提示；第二張開始隱藏
-        if (next === 0) hint.classList.remove("hidden");
+        if (idx === 0) hint.classList.remove("hidden");
         else hint.classList.add("hidden");
 
-        // 先把下一張載到 hidden，載入完成後交叉淡入
-        const url = images[next];
-        hidden.style.opacity = 0; // 確保是隱藏狀態
-        hidden.src = url + ""; // 可加版本參數破快取 ?v=20251226
-        hidden.alt = `slide ${next + 1}`;
-        hidden.onload = () => {
-          visible.classList.remove("active"); // 目前那張淡出
-          hidden.classList.add("active"); // 下一張淡入
-          idx = next;
+        // 直接切換圖片（無淡入）
+        viewer.src = url;
+        viewer.alt = `slide ${idx + 1}`;
 
-          // 預載下一張，讓切換更順
-          const pre = new Image();
-          pre.src = images[(idx + 1) % images.length];
-        };
-        hidden.onerror = () => {
-          console.error("載入失敗：", url);
-        };
+        // 預載下一張，提升切換順暢度
+        const pre = new Image();
+        pre.src = images[(idx + 1) % images.length];
       }
 
       // 點擊下一張
@@ -142,8 +116,8 @@
         startX = null;
       });
 
-      // 初始預載第 2 張
-      new Image().src = images[1 % images.length];
+      // 初始化（顯示第一張；提示可見）
+      show(0);
     </script>
   </body>
 </html>
