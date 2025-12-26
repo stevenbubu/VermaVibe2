@@ -5,21 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>圖片完整呈現頁面（點擊下一張）</title>
     <style>
-      html,
-      body {
-        height: 100%;
-        margin: 0;
-        background: #000;
-      }
-
-      .fullscreen {
-        position: fixed;
-        inset: 0;
+      inset: 0;      html, body {
         display: flex;
         align-items: center;
         justify-content: center;
-        /* 讓整個區域都能接收點擊 */
-        cursor: pointer;
+        cursor: pointer;    /* 讓整個區域都能接收點擊 */
         user-select: none;
       }
 
@@ -28,8 +18,7 @@
         max-height: 100vh;
         width: auto;
         height: auto;
-        object-fit: contain;
-        /* 完整顯示，不裁切 */
+        object-fit: contain; /* 完整顯示，不裁切 */
         background: #000;
       }
 
@@ -43,25 +32,18 @@
           "Microsoft JhengHei", sans-serif;
         opacity: 0.7;
         text-align: center;
-        transition: opacity 0.3s ease;
-        /* ✅ 淡出動畫 */
+        transition: opacity 0.3s ease; /* ✅ 淡出動畫 */
       }
 
-      .hint.hidden {
-        opacity: 0;
-        pointer-events: none;
-      }
-
-      /* ✅ 隱藏狀態 */
+      .hint.hidden { opacity: 0; pointer-events: none; } /* ✅ 隱藏狀態 */
     </style>
   </head>
 
   <body>
     <div class="fullscreen" id="stage">
       <!-- 只保留一個 img，透過 JS 更換 src -->
-      <img id="viewer" src="images/VermaVibe_20251217/1.PNG" alt="frontpage" />
-    </div>
-    <div class="hint">點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動</div>
+      <img id="viewer" src="images/VermaVibe_20251217/1.PNG" alt="frontpage"在 JS 控制 -->
+    <div class="hint" id="hint">點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動</div>
 
     <script>
       // 👉 把你的圖片列表放在這裡（路徑需正確、大小寫敏感）
@@ -81,9 +63,9 @@
       ];
 
       let index = 0;
-      const imgEl = document.getElementById("viewer");
+      const imgEl   = document.getElementById("viewer");
       const stageEl = document.getElementById("stage");
-      const hintEl = document.getElementById("hint");
+      const hintEl  = document.getElementById("hint");
 
       // 顯示指定索引的圖片
       function show(i) {
@@ -127,8 +109,11 @@
         startX = null;
       });
 
-      // 初始化
+      // 初始化（顯示第一張，提示可見）
       show(0);
+
+      // （可選）即使停在第一張，提示也在 3 秒後淡出一次
+      // setTimeout(() => hintEl.classList.add("hidden"), 3000);
     </script>
   </body>
 </html>
