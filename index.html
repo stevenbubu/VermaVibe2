@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>點擊下一張 (ver 0.0.21)</title>
+    <title>點擊下一張 (ver 0.0.22)</title>
     <style>
       html,
       body {
@@ -19,6 +19,7 @@
         justify-content: center;
         cursor: pointer; /* 整個區域都可點 */
         user-select: none;
+        background: #000;
       }
       /* 單一圖片，無任何淡入效果 */
       .slide {
@@ -56,19 +57,26 @@
   <body>
     <div class="stage" id="stage">
       <!-- ✅ 單一 img，透過 JS 直接更換 src -->
-      images/VermaVibe_20251217/1.PNG
+      <img id="viewer" class="slide" src="" alt="slide" />
     </div>
+
     <div class="hint" id="hint">
       點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動
     </div>
 
     <script>
-      // 👉 依你的檔名生成清單（若是 01.PNG 需改用 padStart）
+      // 👉 若檔名是 01.PNG、02.PNG... 用 padStart 生成
       const count = 12;
+      const folder = "images/VermaVibe_20251217";
+
+      // 如果你的檔名是 1.PNG ~ 12.PNG，使用下方這段：
       const images = Array.from(
         { length: count },
-        (_, i) => `images/VermaVibe_20251217/${String(i + 1)}.PNG`
+        (_, i) => `${folder}/${String(i + 1)}.PNG`
       );
+
+      // 若你的檔名是 01.PNG ~ 12.PNG，改用這段：
+      // const images = Array.from({ length: count }, (_, i) => `${folder}/${String(i + 1).padStart(2, "0")}.PNG`);
 
       let idx = 0;
       const viewer = document.getElementById("viewer");
@@ -87,20 +95,43 @@
         viewer.src = url;
         viewer.alt = `slide ${idx + 1}`;
 
+        // 增加載入失敗的回退（避免壞連結卡住）
+        viewer.onerror = () => {
+          console.warn("載入失敗：", url);
+          hint.textContent = `載入失敗：${url}（點擊可跳下一張）`;
+          hint.classList.remove("hidden");
+        };
+
         // 預載下一張，提升切換順暢度
         const pre = new Image();
         pre.src = images[(idx + 1) % images.length];
       }
 
-      // 點擊下一張
+      // 點擊下一張（整個舞台可點）
       stage.addEventListener("click", () => show(idx + 1));
 
-      // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張
+      // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張；空白鍵下一張
       document.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowLeft") show(idx - 1);
-        if (e.key === "ArrowRight") show(idx + 1);
-        if (e.key === "Home") show(0);
-        if (e.key === "End") show(images.length - 1);
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          show(idx - 1);
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          show(idx + 1);
+        }
+        if (e.key === "Home") {
+          e.preventDefault();
+          show(0);
+        }
+        if (e.key === "End") {
+          e.preventDefault();
+          show(images.length - 1);
+        }
+        if (e.key === " ") {
+          e.preventDefault();
+          show(idx + 1);
+        }
       });
 
       // 手機滑動：右滑上一張、左滑下一張
