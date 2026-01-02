@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.31</title>
+    <title>Ver 0.0.32</title>
     <style>
       html,
       body {
@@ -23,7 +23,6 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        cursor: pointer; /* 整個區域都可點 */
         user-select: none;
         background: #000;
       }
@@ -68,7 +67,7 @@
     </div>
 
     <div class="hint" id="hint">
-      點擊畫面➡下一張｜← → 鍵切換｜手機可左右滑動
+      左半邊＝上一張｜右半邊＝下一張｜← → 鍵切換｜手機可滑動或左右輕點
     </div>
 
     <script>
@@ -112,7 +111,7 @@
         pre.src = images[(idx + 1) % images.length];
       }
 
-      // 👉 共用的「依點擊位置」判斷函式
+      // 👉 共用的「依點擊位置」判斷函式（左右半邊）
       function handlePositionalClick(clientX) {
         const { left, width } = stage.getBoundingClientRect();
         const x = clientX - left;
@@ -124,21 +123,20 @@
         }
       }
 
-      // 滑鼠點擊（整個舞台區域）
-      stage.addEventListener("click", (e) => {
-        handlePositionalClick(e.clientX);
-      });
-
-      // 覆蓋層也接同樣邏輯（你已讓它接管事件）
+      // ====== 滑鼠點擊（只在 overlay 綁定，並阻止冒泡）======
       overlay.addEventListener("click", (e) => {
+        e.stopPropagation(); // 防止冒泡到其他容器（避免重複觸發）
         handlePositionalClick(e.clientX);
       });
 
+      // 取消右鍵選單
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
-      overlay.addEventListener("click", () => show(idx + 1));
 
-      // 點擊下一張（整個舞台可點）
-      // stage.addEventListener("click", () => show(idx + 1));
+      // 🚫 移除會造成衝突的第二個 overlay click 綁定
+      // overlay.addEventListener("click", () => show(idx + 1)); // <- 刪除
+
+      // 🚫 不在 stage 綁 click，讓 overlay 單一來源處理即可
+      // stage.addEventListener("click", () => show(idx + 1)); // <- 刪除
 
       // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張；空白鍵下一張
       document.addEventListener("keydown", (e) => {
@@ -164,43 +162,28 @@
         }
       });
 
-      // // 手機滑動：右滑上一張、左滑下一張
-      // let startX = null;
-      // stage.addEventListener("touchstart", (e) => {
-      //   startX = e.touches[0].clientX;
-      // });
-      // stage.addEventListener("touchend", (e) => {
-      //   if (startX === null) return;
-      //   const dx = e.changedTouches[0].clientX - startX;
-      //   if (dx > 50) show(idx - 1);
-      //   if (dx < -50) show(idx + 1);
-      //   startX = null;
-      // });
-
-      // 手機：滑動閾值 + 點擊左右半邊
+      // ====== 觸控：滑動閾值 + 左右輕點（在 overlay 綁定）======
       let startX = null;
-      let isSwipe = false;
 
-      stage.addEventListener(
+      overlay.addEventListener(
         "touchstart",
         (e) => {
+          // 僅記錄起點，避免阻塞瀏覽器捲動 => passive: true
           startX = e.touches[0].clientX;
-          isSwipe = false;
         },
         { passive: true }
       );
 
-      stage.addEventListener(
+      overlay.addEventListener(
         "touchmove",
         (e) => {
-          const dx = e.touches[0].clientX - startX;
-          // 超過 20px 就視為滑動，不當作點擊
-          if (Math.abs(dx) > 20) isSwipe = true;
+          // 不需要阻止預設行為；保留捲動效能
         },
         { passive: true }
       );
 
-      stage.addEventListener("touchend", (e) => {
+      overlay.addEventListener("touchend", (e) => {
+        e.stopPropagation(); // 防止冒泡造成重複觸發
         const endX = e.changedTouches[0].clientX;
         const dx = endX - startX;
 
@@ -213,7 +196,6 @@
           handlePositionalClick(endX);
         }
         startX = null;
-        isSwipe = false;
       });
 
       // 初始化（顯示第一張；提示可見）
