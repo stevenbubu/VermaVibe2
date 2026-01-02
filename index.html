@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.28</title>
+    <title>Ver 0.0.29</title>
     <style>
       html,
       body {
@@ -86,7 +86,7 @@
       const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
-      const overlay = document.querySelector(".overlay");
+      const overlay = document.querySelector("overlay");
 
       function show(i) {
         idx = (i + images.length) % images.length;
@@ -112,8 +112,30 @@
         pre.src = images[(idx + 1) % images.length];
       }
 
+      // 👉 共用的「依點擊位置」判斷函式
+      function handlePositionalClick(clientX) {
+        const { left, width } = stage.getBoundingClientRect();
+        const x = clientX - left;
+        const half = width / 2;
+        if (x < half) {
+          show(idx - 1); // 左半邊：上一張
+        } else {
+          show(idx + 1); // 右半邊：下一張
+        }
+      }
+
+      // 滑鼠點擊（整個舞台區域）
+      stage.addEventListener("click", (e) => {
+        handlePositionalClick(e.clientX);
+      });
+
+      // 覆蓋層也接同樣邏輯（你已讓它接管事件）
+      overlay.addEventListener("click", (e) => {
+        handlePositionalClick(e.clientX);
+      });
+
       // 點擊下一張（整個舞台可點）
-      stage.addEventListener("click", () => show(idx + 1));
+      // stage.addEventListener("click", () => show(idx + 1));
 
       // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張；空白鍵下一張
       document.addEventListener("keydown", (e) => {
@@ -139,20 +161,59 @@
         }
       });
 
-      overlay.addEventListener("contextmenu", (e) => e.preventDefault());
-      overlay.addEventListener("click", () => show(idx + 1));
+      // overlay.addEventListener("contextmenu", (e) => e.preventDefault());
+      // overlay.addEventListener("click", () => show(idx + 1));
 
-      // 手機滑動：右滑上一張、左滑下一張
+      // // 手機滑動：右滑上一張、左滑下一張
+      // let startX = null;
+      // stage.addEventListener("touchstart", (e) => {
+      //   startX = e.touches[0].clientX;
+      // });
+      // stage.addEventListener("touchend", (e) => {
+      //   if (startX === null) return;
+      //   const dx = e.changedTouches[0].clientX - startX;
+      //   if (dx > 50) show(idx - 1);
+      //   if (dx < -50) show(idx + 1);
+      //   startX = null;
+      // });
+
+      // 手機：滑動閾值 + 點擊左右半邊
       let startX = null;
-      stage.addEventListener("touchstart", (e) => {
-        startX = e.touches[0].clientX;
-      });
+      let isSwipe = false;
+
+      stage.addEventListener(
+        "touchstart",
+        (e) => {
+          startX = e.touches[0].clientX;
+          isSwipe = false;
+        },
+        { passive: true }
+      );
+
+      stage.addEventListener(
+        "touchmove",
+        (e) => {
+          const dx = e.touches[0].clientX - startX;
+          // 超過 20px 就視為滑動，不當作點擊
+          if (Math.abs(dx) > 20) isSwipe = true;
+        },
+        { passive: true }
+      );
+
       stage.addEventListener("touchend", (e) => {
-        if (startX === null) return;
-        const dx = e.changedTouches[0].clientX - startX;
-        if (dx > 50) show(idx - 1);
-        if (dx < -50) show(idx + 1);
+        const endX = e.changedTouches[0].clientX;
+        const dx = endX - startX;
+
+        // 大滑幅 => 視為滑動
+        if (Math.abs(dx) > 50) {
+          if (dx > 0) show(idx - 1);
+          else show(idx + 1);
+        } else {
+          // 小滑幅或輕觸 => 視為「左右點擊」
+          handlePositionalClick(endX);
+        }
         startX = null;
+        isSwipe = false;
       });
 
       // 初始化（顯示第一張；提示可見）
