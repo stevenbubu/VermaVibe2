@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.33</title>
+    <title>Ver 0.0.34</title>
     <style>
       html,
       body {
@@ -123,12 +123,6 @@
         }
       }
 
-      // ====== 滑鼠點擊（只在 overlay 綁定，並阻止冒泡）======
-      // overlay.addEventListener("click", (e) => {
-      //   e.stopPropagation(); // 防止冒泡到其他容器（避免重複觸發）
-      //   handlePositionalClick(e.clientX);
-      // });
-
       // 取消右鍵選單
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -163,12 +157,6 @@
         pointerStartX = null;
       });
 
-      // 🚫 移除會造成衝突的第二個 overlay click 綁定
-      // overlay.addEventListener("click", () => show(idx + 1)); // <- 刪除
-
-      // 🚫 不在 stage 綁 click，讓 overlay 單一來源處理即可
-      // stage.addEventListener("click", () => show(idx + 1)); // <- 刪除
-
       // 鍵盤：← 前一張；→ 下一張；Home 第一張；End 最後一張；空白鍵下一張
       document.addEventListener("keydown", (e) => {
         if (e.key === "ArrowLeft") {
@@ -192,42 +180,6 @@
           show(idx + 1);
         }
       });
-
-      // ====== 觸控：滑動閾值 + 左右輕點（在 overlay 綁定）======
-      // let startX = null;
-
-      // overlay.addEventListener(
-      //   "touchstart",
-      //   (e) => {
-      //     // 僅記錄起點，避免阻塞瀏覽器捲動 => passive: true
-      //     startX = e.touches[0].clientX;
-      //   },
-      //   { passive: true }
-      // );
-
-      // overlay.addEventListener(
-      //   "touchmove",
-      //   (e) => {
-      //     // 不需要阻止預設行為；保留捲動效能
-      //   },
-      //   { passive: true }
-      // );
-
-      // overlay.addEventListener("touchend", (e) => {
-      //   e.stopPropagation(); // 防止冒泡造成重複觸發
-      //   const endX = e.changedTouches[0].clientX;
-      //   const dx = endX - startX;
-
-      //   // 大滑幅 => 視為滑動
-      //   if (Math.abs(dx) > 50) {
-      //     if (dx > 0) show(idx - 1);
-      //     else show(idx + 1);
-      //   } else {
-      //     // 小滑幅或輕觸 => 視為「左右點擊」
-      //     handlePositionalClick(endX);
-      //   }
-      //   startX = null;
-      // });
 
       // 初始化（顯示第一張；提示可見）
       show(0);
