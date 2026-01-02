@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.29</title>
+    <title>Ver 0.0.30</title>
     <style>
       html,
       body {
@@ -134,6 +134,9 @@
         handlePositionalClick(e.clientX);
       });
 
+      overlay.addEventListener("contextmenu", (e) => e.preventDefault());
+      overlay.addEventListener("click", () => show(idx + 1));
+
       // 點擊下一張（整個舞台可點）
       // stage.addEventListener("click", () => show(idx + 1));
 
@@ -160,9 +163,6 @@
           show(idx + 1);
         }
       });
-
-      // overlay.addEventListener("contextmenu", (e) => e.preventDefault());
-      // overlay.addEventListener("click", () => show(idx + 1));
 
       // // 手機滑動：右滑上一張、左滑下一張
       // let startX = null;
