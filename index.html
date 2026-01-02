@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.25</title>
+    <title>Ver 0.0.26</title>
     <style>
       html,
       body {
@@ -11,12 +11,12 @@
         margin: 0;
         background: #000;
       }
-      /* .overlay {
+      .overlay {
         position: absolute;
         inset: 0;
         cursor: pointer;
         background: transparent; /* 透明，但接管所有事件 */
-      } */
+      }
       .zones {
         position: fixed;
         inset: 0;
@@ -28,7 +28,8 @@
         cursor: pointer;
         background: transparent;
       }
-      .zone.left { /* 可選：加一點可視化提示（開發時用） */
+      .zone.left {
+        /* 可選：加一點可視化提示（開發時用） */
         /* outline: 1px dashed transparent; */
       }
       .zone.right {
@@ -81,7 +82,7 @@
     <div class="stage" id="stage">
       <!-- ✅ 單一 img，透過 JS 直接更換 src -->
       <img id="viewer" class="slide" src="" alt="slide" draggable="false" />
-      <!-- <div class="overlay" aria-hidden="true"></div> -->
+      <div class="overlay" aria-hidden="true"></div>
       <div class="zones" aria-hidden="true">
         <div class="zone left" aria-label="上一張"></div>
         <div class="zone right" aria-label="下一張"></div>
@@ -93,9 +94,7 @@
     </div>
 
     <script>
-      // const overlay = document.querySelector(".overlay");
-      // overlay.addEventListener("contextmenu", (e) => e.preventDefault());
-      // overlay.addEventListener("click", () => show(idx + 1));
+
 
       // 保留原有滑動支援（touchstart/move/end）在 stage 上即可
 
@@ -171,18 +170,22 @@
         }
       });
 
-      // 手機滑動：右滑上一張、左滑下一張
-      // let startX = null;
-      // stage.addEventListener("touchstart", (e) => {
-      //   startX = e.touches[0].clientX;
-      // });
-      // stage.addEventListener("touchend", (e) => {
-      //   if (startX === null) return;
-      //   const dx = e.changedTouches[0].clientX - startX;
-      //   if (dx > 50) show(idx - 1);
-      //   if (dx < -50) show(idx + 1);
-      //   startX = null;
-      // });
+      const overlay = document.querySelector(".overlay");
+      overlay.addEventListener("contextmenu", (e) => e.preventDefault());
+      overlay.addEventListener("click", () => show(idx + 1));
+
+      手機滑動：右滑上一張、左滑下一張
+      let startX = null;
+      stage.addEventListener("touchstart", (e) => {
+        startX = e.touches[0].clientX;
+      });
+      stage.addEventListener("touchend", (e) => {
+        if (startX === null) return;
+        const dx = e.changedTouches[0].clientX - startX;
+        if (dx > 50) show(idx - 1);
+        if (dx < -50) show(idx + 1);
+        startX = null;
+      });
 
       leftZone.addEventListener("click", () => show(idx - 1));
       rightZone.addEventListener("click", () => show(idx + 1));
