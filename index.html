@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.32</title>
+    <title>Ver 0.0.33</title>
     <style>
       html,
       body {
@@ -16,6 +16,8 @@
         inset: 0;
         cursor: pointer;
         background: transparent; /* 透明，但接管所有事件 */
+        /* 允許垂直捲動；仍可點擊左右半邊 */
+        touch-action: pan-y;
       }
       .stage {
         position: fixed;
@@ -66,9 +68,7 @@
       <div class="overlay" aria-hidden="true"></div>
     </div>
 
-    <div class="hint" id="hint">
-      左半邊＝上一張｜右半邊＝下一張｜← → 鍵切換｜手機可滑動或左右輕點
-    </div>
+    <div class="hint" id="hint">← → 鍵切換｜手機可滑動或左右輕點</div>
 
     <script>
       // 👉 若檔名是 01.PNG、02.PNG... 用 padStart 生成
@@ -124,13 +124,44 @@
       }
 
       // ====== 滑鼠點擊（只在 overlay 綁定，並阻止冒泡）======
-      overlay.addEventListener("click", (e) => {
-        e.stopPropagation(); // 防止冒泡到其他容器（避免重複觸發）
-        handlePositionalClick(e.clientX);
-      });
+      // overlay.addEventListener("click", (e) => {
+      //   e.stopPropagation(); // 防止冒泡到其他容器（避免重複觸發）
+      //   handlePositionalClick(e.clientX);
+      // });
 
       // 取消右鍵選單
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      let pointerStartX = null;
+
+      overlay.addEventListener("pointerdown", (e) => {
+        // 只記座標，不阻塞捲動
+        pointerStartX = e.clientX;
+      });
+
+      overlay.addEventListener("pointerup", (e) => {
+        e.stopPropagation();
+        const endX = e.clientX;
+
+        if (pointerStartX != null) {
+          const dx = endX - pointerStartX;
+
+          // 觸控或筆：用滑動閾值，否則用左右半邊
+          if (e.pointerType === "touch" || e.pointerType === "pen") {
+            if (Math.abs(dx) > 50) {
+              if (dx > 0) show(idx - 1);
+              else show(idx + 1);
+            } else {
+              handlePositionalClick(endX);
+            }
+          } else {
+            // 滑鼠：左右半邊
+            handlePositionalClick(endX);
+          }
+        }
+
+        pointerStartX = null;
+      });
 
       // 🚫 移除會造成衝突的第二個 overlay click 綁定
       // overlay.addEventListener("click", () => show(idx + 1)); // <- 刪除
@@ -163,40 +194,40 @@
       });
 
       // ====== 觸控：滑動閾值 + 左右輕點（在 overlay 綁定）======
-      let startX = null;
+      // let startX = null;
 
-      overlay.addEventListener(
-        "touchstart",
-        (e) => {
-          // 僅記錄起點，避免阻塞瀏覽器捲動 => passive: true
-          startX = e.touches[0].clientX;
-        },
-        { passive: true }
-      );
+      // overlay.addEventListener(
+      //   "touchstart",
+      //   (e) => {
+      //     // 僅記錄起點，避免阻塞瀏覽器捲動 => passive: true
+      //     startX = e.touches[0].clientX;
+      //   },
+      //   { passive: true }
+      // );
 
-      overlay.addEventListener(
-        "touchmove",
-        (e) => {
-          // 不需要阻止預設行為；保留捲動效能
-        },
-        { passive: true }
-      );
+      // overlay.addEventListener(
+      //   "touchmove",
+      //   (e) => {
+      //     // 不需要阻止預設行為；保留捲動效能
+      //   },
+      //   { passive: true }
+      // );
 
-      overlay.addEventListener("touchend", (e) => {
-        e.stopPropagation(); // 防止冒泡造成重複觸發
-        const endX = e.changedTouches[0].clientX;
-        const dx = endX - startX;
+      // overlay.addEventListener("touchend", (e) => {
+      //   e.stopPropagation(); // 防止冒泡造成重複觸發
+      //   const endX = e.changedTouches[0].clientX;
+      //   const dx = endX - startX;
 
-        // 大滑幅 => 視為滑動
-        if (Math.abs(dx) > 50) {
-          if (dx > 0) show(idx - 1);
-          else show(idx + 1);
-        } else {
-          // 小滑幅或輕觸 => 視為「左右點擊」
-          handlePositionalClick(endX);
-        }
-        startX = null;
-      });
+      //   // 大滑幅 => 視為滑動
+      //   if (Math.abs(dx) > 50) {
+      //     if (dx > 0) show(idx - 1);
+      //     else show(idx + 1);
+      //   } else {
+      //     // 小滑幅或輕觸 => 視為「左右點擊」
+      //     handlePositionalClick(endX);
+      //   }
+      //   startX = null;
+      // });
 
       // 初始化（顯示第一張；提示可見）
       show(0);
