@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.27</title>
+    <title>Ver 0.0.28</title>
     <style>
       html,
       body {
@@ -17,24 +17,6 @@
         cursor: pointer;
         background: transparent; /* 透明，但接管所有事件 */
       }
-      /* .zones {
-        position: fixed;
-        inset: 0;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        pointer-events: auto;
-      }
-      .zone {
-        cursor: pointer;
-        background: transparent;
-      }
-      .zone.left {
-        /* 可選：加一點可視化提示（開發時用） */
-        /* outline: 1px dashed transparent; */
-      }
-      .zone.right {
-        /* outline: 1px dashed transparent; */
-      } */
       .stage {
         position: fixed;
         inset: 0;
@@ -83,10 +65,6 @@
       <!-- ✅ 單一 img，透過 JS 直接更換 src -->
       <img id="viewer" class="slide" src="" alt="slide" draggable="false" />
       <div class="overlay" aria-hidden="true"></div>
-      <!-- <div class="zones" aria-hidden="true">
-        <div class="zone left" aria-label="上一張"></div>
-        <div class="zone right" aria-label="下一張"></div>
-      </div> -->
     </div>
 
     <div class="hint" id="hint">
@@ -94,10 +72,6 @@
     </div>
 
     <script>
-
-
-      // 保留原有滑動支援（touchstart/move/end）在 stage 上即可
-
       // 👉 若檔名是 01.PNG、02.PNG... 用 padStart 生成
       const count = 12;
       const folder = "images/VermaVibe_20251217";
@@ -108,16 +82,11 @@
         (_, i) => `${folder}/${String(i + 1)}.PNG`
       );
 
-      // 若你的檔名是 01.PNG ~ 12.PNG，改用這段：
-      // const images = Array.from({ length: count }, (_, i) => `${folder}/${String(i + 1).padStart(2, "0")}.PNG`);
-
       let idx = 0;
       const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
-
-      // const leftZone = document.querySelector(".zone.left");
-      // const rightZone = document.querySelector(".zone.right");
+      const overlay = document.querySelector(".overlay");
 
       function show(i) {
         idx = (i + images.length) % images.length;
@@ -170,11 +139,10 @@
         }
       });
 
-      const overlay = document.querySelector(".overlay");
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
       overlay.addEventListener("click", () => show(idx + 1));
 
-      手機滑動：右滑上一張、左滑下一張
+      // 手機滑動：右滑上一張、左滑下一張
       let startX = null;
       stage.addEventListener("touchstart", (e) => {
         startX = e.touches[0].clientX;
@@ -186,17 +154,6 @@
         if (dx < -50) show(idx + 1);
         startX = null;
       });
-
-      // leftZone.addEventListener("click", () => show(idx - 1));
-      // rightZone.addEventListener("click", () => show(idx + 1));
-
-      // // 觸控（touchend）也支援輕點
-      // leftZone.addEventListener("touchend", () => show(idx - 1), {
-      //   passive: true,
-      // });
-      // rightZone.addEventListener("touchend", () => show(idx + 1), {
-      //   passive: true,
-      // });
 
       // 初始化（顯示第一張；提示可見）
       show(0);
