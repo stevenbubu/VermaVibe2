@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.59</title>
+    <title>Ver 0.0.60</title>
     <style>
       html,
       body {
@@ -85,13 +85,13 @@
         MAX_SCALE = 6;
       const DOUBLE_TAP_MS = 300,
         WHEEL_ZOOM_FACTOR = 1.1;
-      const PAN_SPEED_BASE = 1.6,
-        EPS = 0.5;
 
+      const EPS = 0.5; // 邊界微緩衝，避免浮點造成黑邊
       const isTouchDevice = navigator.maxTouchPoints > 0;
 
       // 中心縮放（不跟游標）
       const ZOOM_ANCHOR = "center"; // 'center' | 'pointer'
+      const DOUBLE_TAP_TARGET_SCALE = 2; // 觸控雙擊放大目標倍數
 
       // Tap 閾值（手機較寬鬆）
       const CLICK_THRESHOLD_PX = isTouchDevice ? 22 : 10;
@@ -101,6 +101,15 @@
       // Swipe 閾值（距離 + 速度）
       const SWIPE_MIN_PX = isTouchDevice ? 48 : 36;
       const SWIPE_MIN_VELOCITY = 0.35; // px/ms
+
+      // ===== 慣性拖曳／反彈參數 =====
+      const INERTIA_MIN_SPEED = 0.02; // px/ms，低於此速即停止
+      const INERTIA_FRICTION = 0.95; // 每幀速度衰減（~60fps）
+      const BOUNCE_COEFF = 0.35; // 觸邊反彈反射係數
+      const PAN_HISTORY_MS = 120; // 計算慣性速度的最後時間窗
+
+      // 雙擊平滑縮放參數
+      const ZOOM_ANIM_MS = 220; // 動畫時長（毫秒）
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
@@ -138,29 +147,22 @@
         lastMoveY = null,
         lastMoveTime = 0;
 
-      // ===== 防跳動：互動期間延後重算（debounce + 髒旗） =====
+      // 防跳動：互動期間延後重算（debounce + 髒旗）
       let recomputeTimer = null;
       let viewportDirty = false;
-      function isInteracting() {
-        return pointers.size > 0 || !!stageDragStart || scale > 1;
-      }
-      function scheduleRecompute(delay = 240) {
-        clearTimeout(recomputeTimer);
-        if (isInteracting()) {
-          viewportDirty = true;
-          return;
-        } // 互動中，只標記髒旗
-        viewportDirty = false;
-        recomputeTimer = setTimeout(() => recomputeBaseSize(), delay);
-      }
-      function tryRecomputeAfterInteraction() {
-        if (viewportDirty && !isInteracting()) scheduleRecompute(120);
-      }
+
+      // 慣性拖曳
+      let panAnimId = null;
+      let panHistory = []; // {x, y, t}
+
+      // 雙擊平滑縮放動畫
+      let zoomAnimId = null;
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
       const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const nowMs = () => performance.now();
 
       function stageSize() {
         const vv = window.visualViewport;
@@ -187,6 +189,29 @@
         return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
       }
 
+      // 取得當前平移邊界（不露黑邊）
+      function getPanBounds() {
+        const { width: stageW, height: stageH } = stageSize();
+        const L = imageTopLeftLocal();
+        const contentW = baseW * scale;
+        const contentH = baseH * scale;
+
+        let minTx, maxTx, minTy, maxTy;
+        if (contentW > stageW) {
+          minTx = stageW - L.x - contentW - EPS;
+          maxTx = -L.x + EPS;
+        } else {
+          minTx = maxTx = 0;
+        }
+        if (contentH > stageH) {
+          minTy = stageH - L.y - contentH - EPS;
+          maxTy = -L.y + EPS;
+        } else {
+          minTy = maxTy = 0;
+        }
+        return { minTx, maxTx, minTy, maxTy };
+      }
+
       // ===== 尺寸與佈局 =====
       function recomputeBaseSize() {
         const { width: sw, height: sh } = stageSize();
@@ -211,25 +236,9 @@
       }
 
       function clampTranslate() {
-        const { width: stageW, height: stageH } = stageSize();
-        const L = imageTopLeftLocal();
-        const contentW = baseW * scale;
-        const contentH = baseH * scale;
-
-        if (contentW > stageW) {
-          const minTx = stageW - L.x - contentW - EPS; // 右貼齊
-          const maxTx = -L.x + EPS; // 左貼齊
-          tx = clamp(tx, minTx, maxTx);
-        } else {
-          tx = 0;
-        }
-        if (contentH > stageH) {
-          const minTy = stageH - L.y - contentH - EPS; // 底貼齊
-          const maxTy = -L.y + EPS; // 頂貼齊
-          ty = clamp(ty, minTy, maxTy);
-        } else {
-          ty = 0;
-        }
+        const { minTx, maxTx, minTy, maxTy } = getPanBounds();
+        tx = clamp(tx, minTx, maxTx);
+        ty = clamp(ty, minTy, maxTy);
       }
 
       function setInteractionMode() {
@@ -243,6 +252,8 @@
       }
 
       function resetTransform() {
+        stopPanInertia();
+        stopZoomAnim();
         scale = 1;
         tx = 0;
         ty = 0;
@@ -252,6 +263,8 @@
 
       // ===== 顯示圖片 =====
       function show(i) {
+        stopPanInertia();
+        stopZoomAnim();
         idx = (i + images.length) % images.length;
         const url = images[idx];
 
@@ -300,15 +313,155 @@
         zoomAtImagePoint(targetScale, stageW / 2, stageH / 2);
       }
 
+      // ===== 雙擊平滑縮放（觸控）=====
+      function easeOutCubic(t) {
+        return 1 - Math.pow(1 - t, 3);
+      }
+      function animateZoomAtCenter(targetScale, duration = ZOOM_ANIM_MS) {
+        stopZoomAnim();
+        const startScale = scale;
+        const { width: stageW, height: stageH } = stageSize();
+        const cX = stageW / 2,
+          cY = stageH / 2;
+        const L = imageTopLeftLocal();
+        const p = clientToImagePoint(cX, cY);
+        const sTarget = clamp(targetScale, MIN_SCALE, MAX_SCALE);
+
+        const t0 = nowMs();
+        const step = () => {
+          const t = nowMs();
+          const dt = Math.min(1, (t - t0) / duration);
+          const k = easeOutCubic(dt);
+          const s = startScale + (sTarget - startScale) * k;
+
+          tx = cX - L.x - p.x * s;
+          ty = cY - L.y - p.y * s;
+          scale = s;
+
+          commit(true);
+          if (dt < 1) {
+            zoomAnimId = requestAnimationFrame(step);
+          } else {
+            stopZoomAnim();
+            commit(true);
+          }
+        };
+        step();
+      }
+      function stopZoomAnim() {
+        if (zoomAnimId) cancelAnimationFrame(zoomAnimId);
+        zoomAnimId = null;
+      }
+
+      // ===== 慣性拖曳（放手後滑動並反彈）=====
+      function startPanInertia(vx, vy) {
+        stopPanInertia();
+        // 速度單位：px/ms；將每幀乘以 dt（ms）
+        let lastTs = nowMs();
+        const { minTx, maxTx, minTy, maxTy } = getPanBounds();
+
+        const step = () => {
+          const ts = nowMs();
+          const dt = Math.max(1, ts - lastTs);
+          lastTs = ts;
+
+          // 速度衰減
+          vx *= Math.pow(INERTIA_FRICTION, dt / 16);
+          vy *= Math.pow(INERTIA_FRICTION, dt / 16);
+
+          // 位移更新
+          tx += vx * dt;
+          ty += vy * dt;
+
+          // 觸邊反彈（反射速度、位置貼齊邊界）
+          if (tx < minTx && vx < 0) {
+            tx = minTx;
+            vx *= -BOUNCE_COEFF;
+          }
+          if (tx > maxTx && vx > 0) {
+            tx = maxTx;
+            vx *= -BOUNCE_COEFF;
+          }
+          if (ty < minTy && vy < 0) {
+            ty = minTy;
+            vy *= -BOUNCE_COEFF;
+          }
+          if (ty > maxTy && vy > 0) {
+            ty = maxTy;
+            vy *= -BOUNCE_COEFF;
+          }
+
+          // 視覺更新（此處不再二次 clamp，靠邊界反彈維持）
+          commit(false);
+
+          // 終止條件：速度很低且在邊界內
+          const small =
+            Math.abs(vx) < INERTIA_MIN_SPEED &&
+            Math.abs(vy) < INERTIA_MIN_SPEED;
+          const insideX = tx >= minTx && tx <= maxTx;
+          const insideY = ty >= minTy && ty <= maxTy;
+          if (small && insideX && insideY) {
+            stopPanInertia();
+            commit(true); // 最終保險性夾限
+            return;
+          }
+          panAnimId = requestAnimationFrame(step);
+        };
+        panAnimId = requestAnimationFrame(step);
+      }
+      function stopPanInertia() {
+        if (panAnimId) cancelAnimationFrame(panAnimId);
+        panAnimId = null;
+      }
+      function recordPanHistory(px, py) {
+        const t = nowMs();
+        panHistory.push({ x: px, y: py, t });
+        const cutoff = t - PAN_HISTORY_MS;
+        while (panHistory.length && panHistory[0].t < cutoff)
+          panHistory.shift();
+      }
+      function computePanVelocity() {
+        if (panHistory.length < 2) return { vx: 0, vy: 0 };
+        const a = panHistory[0],
+          b = panHistory[panHistory.length - 1];
+        const dt = Math.max(1, b.t - a.t);
+        return { vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt }; // px/ms
+      }
+
+      // ===== 防跳動：互動期間延後重算 =====
+      function isInteracting() {
+        return (
+          pointers.size > 0 ||
+          !!stageDragStart ||
+          scale > 1 ||
+          !!panAnimId ||
+          !!zoomAnimId
+        );
+      }
+      function scheduleRecompute(delay = 240) {
+        clearTimeout(recomputeTimer);
+        if (isInteracting()) {
+          viewportDirty = true;
+          return;
+        }
+        viewportDirty = false;
+        recomputeTimer = setTimeout(() => recomputeBaseSize(), delay);
+      }
+      function tryRecomputeAfterInteraction() {
+        if (viewportDirty && !isInteracting()) scheduleRecompute(120);
+      }
+
       // ===== Viewer：Pointer（只負責縮放/拖曳）=====
       viewer.addEventListener(
         "pointerdown",
         (e) => {
+          stopPanInertia(); // 互動開始，停止慣性
           pointers.set(e.pointerId, {
             x: e.clientX,
             y: e.clientY,
             type: e.pointerType,
           });
+
           if (scale > 1) {
             try {
               viewer.setPointerCapture(e.pointerId);
@@ -320,24 +473,27 @@
           }
 
           // 觸控雙擊：未縮放放大；已縮放還原（桌面 mouse/pen 禁用）
-          const now = Date.now();
-          if (e.pointerType === "touch" && now - lastTap < DOUBLE_TAP_MS) {
-            zoomAtCenter(scale > 1 ? 1 : 2);
+          const tNow = nowMs();
+          if (e.pointerType === "touch" && tNow - lastTap < DOUBLE_TAP_MS) {
+            animateZoomAtCenter(scale > 1 ? 1 : DOUBLE_TAP_TARGET_SCALE);
             lastTap = 0;
             return;
           }
-          lastTap = e.pointerType === "touch" ? now : 0;
+          lastTap = e.pointerType === "touch" ? tNow : 0;
 
           if (pointers.size === 1) {
             if (scale > 1) {
               const p = pointers.get(e.pointerId);
               dragStart = { x: p.x, y: p.y, tx0: tx, ty0: ty };
+              panHistory.length = 0;
+              recordPanHistory(p.x, p.y);
             }
           } else if (pointers.size === 2) {
             const pts = [...pointers.values()];
             const mid = midpoint(pts[0], pts[1]);
             touchStartDist = distance(pts[0], pts[1]);
             touchAnchorP = clientToImagePoint(mid.x, mid.y);
+            stopPanInertia();
           }
         },
         { passive: false }
@@ -375,6 +531,7 @@
             const cur = pointers.get(e.pointerId);
             tx = dragStart.tx0 + (cur.x - dragStart.x);
             ty = dragStart.ty0 + (cur.y - dragStart.y);
+            recordPanHistory(cur.x, cur.y);
             commit(true);
           }
         },
@@ -386,10 +543,21 @@
         try {
           viewer.releasePointerCapture(e.pointerId);
         } catch {}
+
         if (pointers.size === 0) {
+          // 慣性：單指拖曳結束後才進行
+          if (dragStart && scale > 1) {
+            const { vx, vy } = computePanVelocity();
+            if (
+              Math.abs(vx) >= INERTIA_MIN_SPEED ||
+              Math.abs(vy) >= INERTIA_MIN_SPEED
+            ) {
+              startPanInertia(vx, vy);
+            }
+          }
           dragStart = null;
           setInteractionMode();
-          scheduleRecompute(); // 手勢結束後允許重算
+          scheduleRecompute();
           tryRecomputeAfterInteraction();
         }
       });
@@ -406,6 +574,7 @@
       stage.addEventListener(
         "pointerdown",
         (e) => {
+          stopPanInertia(); // 互動開始，停止慣性
           pointers.set(e.pointerId, {
             x: e.clientX,
             y: e.clientY,
@@ -414,6 +583,8 @@
 
           if (scale > 1) {
             stageDragStart = { x: e.clientX, y: e.clientY, tx0: tx, ty0: ty };
+            panHistory.length = 0;
+            recordPanHistory(e.clientX, e.clientY);
             try {
               stage.setPointerCapture(e.pointerId);
             } catch {}
@@ -422,7 +593,7 @@
           if (e.buttons && e.buttons !== 1) return; // 僅主鍵/觸控
           tapStartX = e.clientX;
           tapStartY = e.clientY;
-          tapStartTime = performance.now();
+          tapStartTime = nowMs();
           lastMoveX = tapStartX;
           lastMoveY = tapStartY;
           lastMoveTime = tapStartTime;
@@ -433,25 +604,34 @@
       stage.addEventListener(
         "pointermove",
         (e) => {
-          // 手機：縮放/拖曳期間阻止原生捲動介入（關鍵）
           if (scale > 1) e.preventDefault();
 
           if (scale > 1 && stageDragStart) {
             tx = stageDragStart.tx0 + (e.clientX - stageDragStart.x);
             ty = stageDragStart.ty0 + (e.clientY - stageDragStart.y);
+            recordPanHistory(e.clientX, e.clientY);
             commit(true);
             return;
           }
           lastMoveX = e.clientX;
           lastMoveY = e.clientY;
-          lastMoveTime = performance.now();
+          lastMoveTime = nowMs();
         },
         { passive: false }
       );
 
       stage.addEventListener("pointerup", (e) => {
         pointers.delete(e.pointerId);
+
         if (scale > 1) {
+          // 慣性：舞台拖曳結束
+          const { vx, vy } = computePanVelocity();
+          if (
+            Math.abs(vx) >= INERTIA_MIN_SPEED ||
+            Math.abs(vy) >= INERTIA_MIN_SPEED
+          ) {
+            startPanInertia(vx, vy);
+          }
           stageDragStart = null;
           try {
             stage.releasePointerCapture(e.pointerId);
@@ -461,9 +641,10 @@
           return;
         }
 
+        // scale===1：tap 或 swipe 換頁
         const endX = e.clientX,
           endY = e.clientY;
-        const endTime = performance.now();
+        const endTime = nowMs();
         const dx = endX - (tapStartX ?? endX);
         const dy = endY - (tapStartY ?? endY);
         const dt = endTime - (tapStartTime || endTime);
@@ -511,27 +692,6 @@
       stage.addEventListener("contextmenu", (e) => e.preventDefault());
 
       // ===== 滾輪（縮放；永久禁用平移）=====
-      function normalizeMagnitude(e) {
-        let dx = e.deltaX,
-          dy = e.deltaY;
-        const LINE = 40,
-          PAGE = Math.max(window.innerHeight, 600);
-        if (e.deltaMode === 1) {
-          dx *= LINE;
-          dy *= LINE;
-        } else if (e.deltaMode === 2) {
-          dx *= PAGE;
-          dy *= PAGE;
-        }
-        return Math.max(Math.abs(dx), Math.abs(dy));
-      }
-      function panGain(m) {
-        return 1 + 2.5 * Math.tanh(m / 180);
-      }
-      function getPanSpeed(e) {
-        return PAN_SPEED_BASE * panGain(normalizeMagnitude(e));
-      }
-
       const onWheel = (e) => {
         // Ctrl+滾輪：縮放（中心錨點）
         if (e.ctrlKey) {
