@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.61</title>
+    <title>Ver 0.0.62</title>
     <style>
       html,
       body {
@@ -86,7 +86,7 @@
       const DOUBLE_TAP_MS = 300,
         WHEEL_ZOOM_FACTOR = 1.1;
 
-      const EPS = 0.5; // 邊界微緩衝，避免浮點造成黑邊
+      const EPS = 0.2; // 邊界微緩衝，避免浮點造成黑邊
       const isTouchDevice = navigator.maxTouchPoints > 0;
 
       // 中心縮放（不跟游標）
@@ -104,8 +104,8 @@
 
       // 慣性拖曳／反彈參數
       const INERTIA_MIN_SPEED = 0.02; // px/ms，低於此速即停止
-      const INERTIA_FRICTION = 0.95; // 每幀速度衰減（~60fps）
-      const BOUNCE_COEFF = 0.35; // 觸邊反彈反射係數
+      const INERTIA_FRICTION = 0.5; // 每幀速度衰減（~60fps）
+      const BOUNCE_COEFF = 0.1; // 觸邊反彈反射係數
       const PAN_HISTORY_MS = 120; // 計算慣性速度的最後時間窗
 
       // ===== DOM =====
