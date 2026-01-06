@@ -3,14 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.47</title>
+    <title>Ver 0.0.48</title>
     <style>
       html,
       body {
         height: 100%;
         margin: 0;
         background: #000;
-        /* 防止瀏覽器在邊界時的橡皮筋效應干擾（支援度佳） */
         overscroll-behavior: contain;
       }
       .stage {
@@ -33,20 +32,11 @@
         will-change: transform;
         transform-origin: 0 0;
         position: relative;
-        z-index: 2;
-        /* 初始：允許捏合與垂直捲動；縮放中由 JS 改為 none */
-        touch-action: pan-y pinch-zoom;
-        /* 開 GPU 合成層，讓位移更順 */
-        backface-visibility: hidden;
-        translate: 0 0; /* 或 transform: translateZ(0); */
-      }
-      .overlay {
-        position: absolute;
-        inset: 0;
-        cursor: pointer;
-        background: transparent;
-        touch-action: pan-y pinch-zoom;
         z-index: 1;
+        /* 初始：允許捏合與垂直捲動；縮放時由 JS 改為 none */
+        touch-action: pan-y pinch-zoom;
+        backface-visibility: hidden;
+        translate: 0 0;
       }
       .hint {
         position: fixed;
@@ -73,7 +63,6 @@
   <body>
     <div class="stage" id="stage">
       <img id="viewer" class="slide" src="" alt="slide" draggable="false" />
-      <div class="overlay" aria-hidden="true"></div>
     </div>
 
     <div class="hint" id="hint">
@@ -95,12 +84,12 @@
         WHEEL_ZOOM_FACTOR = 1.1;
       const PAN_SPEED_BASE = 1.6,
         EPS = 0.75;
+      const CLICK_THRESHOLD_PX = 10;
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
-      const overlay = document.querySelector(".overlay");
 
       // ===== 狀態 =====
       let idx = 0;
@@ -110,27 +99,28 @@
       let rafId = null,
         lastTap = 0;
 
-      // 滑鼠/筆：Pointer 狀態
+      // Pointer 狀態（滑鼠/筆/觸控的通用）
       const pointers = new Map();
       let dragStart = null;
 
-      // Touch 狀態（行動裝置）
+      // Touch Fallback（行動裝置）
+      const isTouchDevice = navigator.maxTouchPoints > 0;
       let touchDragStart = null; // 單指拖曳
       let touchStartDist = 0; // pinch 起始距離
       let touchStartScale = 1; // pinch 起始縮放
-      let touchAnchorP = { x: 0, y: 0 }; // pinch 圖片錨點
+      let touchAnchorP = { x: 0, y: 0 }; // pinch 錨點（圖片座標）
 
-      // 未縮放的顯示尺寸快取
+      // 未縮放時 contain 尺寸快取（畫面中的 w/h）
       let baseW = 0,
         baseH = 0;
 
-      // overlay 點擊判斷用（避免滑動誤觸）
-      let overlayDownX = null;
+      // 點擊閾值判斷（避免滑動誤觸）
+      let downX = null;
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: a.y + b.y });
 
       function stageRect() {
         return stage.getBoundingClientRect();
@@ -139,14 +129,12 @@
         const r = stageRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
-
       function fitContain(sw, sh, nw, nh) {
         const imgRatio = nw / nh,
           stageRatio = sw / sh;
-        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio }; // 寬受限
-        return { h: sh, w: sh * imgRatio }; // 高受限
+        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
+        return { h: sh, w: sh * imgRatio };
       }
-
       // 圖片未變形時的「畫面左上角」（flex 置中 + contain）
       function imageTopLeft() {
         const r = stageRect();
@@ -155,7 +143,6 @@
           y: r.top + (r.height - baseH) / 2,
         };
       }
-
       // client -> 圖片本地座標（未縮放）
       function clientToImagePoint(clientX, clientY) {
         const L = imageTopLeft();
@@ -163,7 +150,6 @@
         const iy = (clientY - L.y - ty) / scale;
         return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
       }
-
       function recomputeBaseSize() {
         const r = stageRect();
         const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
@@ -210,16 +196,14 @@
         }
       }
 
-      // 🔧 同時切 viewer/overlay 的 touch-action（關鍵）
+      // 切換互動模式：縮放中禁用原生手勢，未縮放允許
       function setInteractionMode() {
         if (scale === 1) {
-          overlay.style.touchAction = "pan-y pinch-zoom";
-          overlay.style.pointerEvents = "auto";
           viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生捲動/捏合
+          viewer.style.pointerEvents = "auto";
         } else {
-          overlay.style.touchAction = "none";
-          overlay.style.pointerEvents = "none";
           viewer.style.touchAction = "none"; // 縮放中：交給自訂手勢
+          viewer.style.pointerEvents = "auto";
         }
       }
 
@@ -234,6 +218,7 @@
       function show(i) {
         idx = (i + images.length) % images.length;
         const url = images[idx];
+
         hint.classList.toggle("hidden", idx !== 0);
         resetTransform();
 
@@ -247,17 +232,20 @@
           hint.classList.remove("hidden");
         };
 
+        // 預載下一張
         const pre = new Image();
         pre.src = images[(idx + 1) % images.length];
       }
 
+      // 左右半邊換頁（僅 scale===1 時）
       function handlePositionalClick(clientX) {
+        if (scale !== 1) return;
         const r = stageRect();
         const leftHalf = clientX - r.left < r.width / 2;
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // ===== 以「圖片座標」為中心縮放 =====
+      // 以「圖片座標」為中心縮放
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
@@ -270,6 +258,8 @@
 
       // ===== 桌面：Pointer（滑鼠/筆）=====
       viewer.addEventListener("pointerdown", (e) => {
+        downX = e.clientX;
+
         pointers.set(e.pointerId, {
           x: e.clientX,
           y: e.clientY,
@@ -294,7 +284,7 @@
         } else if (pointers.size === 2) {
           const pts = [...pointers.values()];
           const mid = midpoint(pts[0], pts[1]);
-          touchAnchorP = clientToImagePoint(mid.x, mid.y); // 共用同一錨點策略
+          touchAnchorP = clientToImagePoint(mid.x, mid.y); // 共用錨點策略
         }
       });
 
@@ -308,11 +298,15 @@
 
         if (pointers.size === 2) {
           const pts = [...pointers.values()];
+          // 桌面多指：以距離比例縮放
           const curDist = distance(pts[0], pts[1]);
-          const prevDist = startDist || curDist;
-          startDist = prevDist; // 桌面筆/觸控板時用不到也不影響
-          const scaleFactor = curDist / prevDist || 1;
-          const s1 = clamp(scale * scaleFactor, MIN_SCALE, MAX_SCALE);
+          const prevDist = viewer._prevDist ?? curDist;
+          viewer._prevDist = curDist;
+          const s1 = clamp(
+            scale * (curDist / prevDist || 1),
+            MIN_SCALE,
+            MAX_SCALE
+          );
 
           const mid = midpoint(pts[0], pts[1]);
           const L = imageTopLeft();
@@ -330,11 +324,21 @@
       });
 
       viewer.addEventListener("pointerup", (e) => {
+        const startX = downX ?? e.clientX;
+        const dx = Math.abs(e.clientX - startX);
+        downX = null;
+
+        // 點擊（非縮放）觸發半邊換頁
+        if (dx <= CLICK_THRESHOLD_PX && scale === 1) {
+          handlePositionalClick(e.clientX);
+        }
+
         pointers.delete(e.pointerId);
         if (e.pointerType !== "touch")
           viewer.releasePointerCapture(e.pointerId);
         if (pointers.size === 0) {
           dragStart = null;
+          viewer._prevDist = undefined;
           setInteractionMode();
         }
       });
@@ -342,17 +346,15 @@
       viewer.addEventListener("pointercancel", (e) => {
         pointers.delete(e.pointerId);
         dragStart = null;
+        viewer._prevDist = undefined;
         setInteractionMode();
       });
 
       // ===== 手機：Touch Fallback（滑順多指）=====
-      const isTouchDevice = navigator.maxTouchPoints > 0;
-
       if (isTouchDevice) {
         viewer.addEventListener(
           "touchstart",
           (e) => {
-            // 兩指：建立 pinch 錨點
             if (e.touches.length === 2) {
               const t1 = e.touches[0],
                 t2 = e.touches[1];
@@ -366,8 +368,7 @@
                 t2.clientY - t1.clientY
               );
               touchStartScale = scale;
-              // 縮放期：禁用瀏覽器手勢
-              viewer.style.touchAction = "none";
+              viewer.style.touchAction = "none"; // 縮放期：禁用瀏覽器手勢
             } else if (e.touches.length === 1 && scale > 1) {
               const t = e.touches[0];
               touchDragStart = { x: t.clientX, y: t.clientY, tx0: tx, ty0: ty };
@@ -382,8 +383,7 @@
         viewer.addEventListener(
           "touchmove",
           (e) => {
-            // 在捏合或拖曳時阻止瀏覽器捲動
-            if (e.touches.length >= 1) e.preventDefault();
+            if (e.touches.length >= 1) e.preventDefault(); // 避免捲動
 
             if (e.touches.length === 2) {
               const t1 = e.touches[0],
@@ -416,7 +416,7 @@
             }
           },
           { passive: false }
-        ); // ⬅️ 必須 passive:false 才能 preventDefault
+        ); // 必須 passive:false 才能 preventDefault
 
         viewer.addEventListener(
           "touchend",
@@ -442,20 +442,7 @@
         );
       }
 
-      // ===== overlay：未縮放時的左右半邊換頁（含點擊閾值）=====
-      overlay.addEventListener("contextmenu", (e) => e.preventDefault());
-      overlay.addEventListener("pointerdown", (e) => {
-        overlayDownX = e.clientX;
-      });
-      overlay.addEventListener("pointerup", (e) => {
-        if (scale !== 1) return;
-        const dx = Math.abs(e.clientX - (overlayDownX ?? e.clientX));
-        overlayDownX = null;
-        if (dx > 10) return; // 閾值：10px
-        handlePositionalClick(e.clientX);
-      });
-
-      // ===== 桌面：滾輪（縮放／平移）=====
+      // ===== 滾輪（縮放／平移）=====
       function normalizeMagnitude(e) {
         let dx = e.deltaX,
           dy = e.deltaY;
@@ -540,6 +527,19 @@
         }
       });
 
+      // ===== 點擊（左右半）改掛在 stage（也可掛 viewer）=====
+      stage.addEventListener("pointerdown", (e) => {
+        downX = e.clientX;
+      });
+      stage.addEventListener("pointerup", (e) => {
+        const startX = downX ?? e.clientX;
+        const dx = Math.abs(e.clientX - startX);
+        downX = null;
+        if (dx > CLICK_THRESHOLD_PX) return;
+        handlePositionalClick(e.clientX);
+      });
+      stage.addEventListener("contextmenu", (e) => e.preventDefault());
+
       // ===== 舞台尺寸變更 =====
       window.addEventListener("resize", () => {
         recomputeBaseSize();
@@ -554,3 +554,4 @@
     </script>
   </body>
 </html>
+``
