@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.45</title>
+    <title>Ver 0.0.46</title>
     <style>
       html,
       body {
@@ -32,6 +32,8 @@
         transform-origin: 0 0;
         position: relative;
         z-index: 2;
+        /* 預設給行動裝置更友善的設定（後續用 JS 依 scale 切換） */
+        touch-action: pan-y pinch-zoom;
       }
       .overlay {
         position: absolute;
@@ -115,6 +117,9 @@
       let baseW = 0,
         baseH = 0;
 
+      // overlay 點擊判斷用（避免滑動誤觸）
+      let overlayDownX = null;
+
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -174,41 +179,40 @@
         });
       }
 
-      // ✅ 以舞台四邊 + 圖片左上角 + 縮放後內容尺寸計算「非對稱」邊界
+      // ✅ 非對稱邊界（不露黑邊）+ 內容小於舞台時置中
       function clampTranslate() {
         const r = stageRect();
         const L = imageTopLeft();
-
         const contentW = baseW * scale;
         const contentH = baseH * scale;
 
-        // 水平：內容寬 > 舞台寬 才需要覆蓋；否則回到置中（避免黑邊被拖動）
         if (contentW > r.width) {
-          const minTx = r.right - L.x - contentW - EPS; // 不露右邊黑
-          const maxTx = r.left - L.x + EPS; // 不露左邊黑
+          const minTx = r.right - L.x - contentW - EPS;
+          const maxTx = r.left - L.x + EPS;
           tx = clamp(tx, minTx, maxTx);
         } else {
-          // 內容比舞台窄：維持置中
           tx = 0;
         }
 
-        // 垂直：內容高 > 舞台高 才需要覆蓋；否則回到置中
         if (contentH > r.height) {
-          const minTy = r.bottom - L.y - contentH - EPS; // 不露下邊黑
-          const maxTy = r.top - L.y + EPS; // 不露上邊黑
+          const minTy = r.bottom - L.y - contentH - EPS;
+          const maxTy = r.top - L.y + EPS;
           ty = clamp(ty, minTy, maxTy);
         } else {
           ty = 0;
         }
       }
 
+      // 🔧 關鍵修正：viewer 也要切換 touch-action（行動裝置）
       function setInteractionMode() {
         if (scale === 1) {
           overlay.style.touchAction = "pan-y pinch-zoom";
           overlay.style.pointerEvents = "auto";
+          viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生捲動/捏合
         } else {
           overlay.style.touchAction = "none";
           overlay.style.pointerEvents = "none";
+          viewer.style.touchAction = "none"; // 縮放中：交給自訂手勢
         }
       }
 
@@ -250,7 +254,7 @@
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
-        const p = clientToImagePoint(clientX, clientY); // 觸點對應圖片座標
+        const p = clientToImagePoint(clientX, clientY);
         tx = clientX - L.x - p.x * s1;
         ty = clientY - L.y - p.y * s1;
         scale = s1;
@@ -284,7 +288,7 @@
           startDist = distance(pts[0], pts[1]);
           startScale = scale;
           const mid = midpoint(pts[0], pts[1]);
-          anchorP = clientToImagePoint(mid.x, mid.y); // 記錄錨點
+          anchorP = clientToImagePoint(mid.x, mid.y);
           setInteractionMode();
         }
       });
@@ -325,7 +329,7 @@
         pointers.delete(e.pointerId);
         viewer.releasePointerCapture(e.pointerId);
         if (pointers.size === 0) {
-          if (scale === 1 && !dragStart) handlePositionalClick(e.clientX);
+          // ⛔️ 移除圖片上的換頁（避免和 overlay 雙重觸發）
           dragStart = null;
           setInteractionMode();
         }
@@ -337,18 +341,26 @@
         setInteractionMode();
       });
 
-      // ===== overlay：未縮放時的左右半邊換頁 =====
+      // ===== overlay：未縮放時的左右半邊換頁（含點擊閾值）=====
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
+      overlay.addEventListener("pointerdown", (e) => {
+        overlayDownX = e.clientX;
+      });
       overlay.addEventListener("pointerup", (e) => {
-        if (scale === 1) handlePositionalClick(e.clientX);
+        if (scale !== 1) return;
+        // 若滑動距離太大，視為拖動而非點擊
+        const dx = Math.abs(e.clientX - (overlayDownX ?? e.clientX));
+        overlayDownX = null;
+        if (dx > 10) return; // 閾值：10px
+        handlePositionalClick(e.clientX);
       });
 
       // ===== 滾輪：縮放／平移 =====
       function normalizeMagnitude(e) {
         let dx = e.deltaX,
           dy = e.deltaY;
-        const LINE = 40;
-        const PAGE = Math.max(window.innerHeight, 600);
+        const LINE = 40,
+          PAGE = Math.max(window.innerHeight, 600);
         if (e.deltaMode === 1) {
           dx *= LINE;
           dy *= LINE;
@@ -442,4 +454,3 @@
     </script>
   </body>
 </html>
-``
