@@ -2,11 +2,12 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
+    <!-- 使用 viewport-fit=cover + dvh 以提升直立式可視高度精準度 -->
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.50</title>
+    <title>Ver 0.0.51</title>
     <style>
       html,
       body {
@@ -18,7 +19,7 @@
       .stage {
         position: fixed;
         inset: 0;
-        /* 以動態視窗高度避免手機直立時 100vh 的工具列誤差 */
+        /* 動態視窗高度，避免手機直立時 100vh 工具列誤差 */
         height: 100dvh;
         display: flex;
         align-items: center;
@@ -38,7 +39,8 @@
         transform-origin: 0 0;
         position: relative;
         z-index: 1;
-        touch-action: pan-y pinch-zoom; /* 未縮放允許原生，縮放時會改為 none */
+        /* 未縮放允許原生捏合/垂直捲動；縮放時由 JS 改為 none */
+        touch-action: pan-y pinch-zoom;
         backface-visibility: hidden;
         translate: 0 0;
       }
@@ -130,7 +132,16 @@
       function stageRect() {
         return stage.getBoundingClientRect();
       }
+      function stageSize() {
+        const vv = window.visualViewport;
+        if (vv && vv.width && vv.height) {
+          return { width: vv.width, height: vv.height };
+        }
+        const r = stageRect();
+        return { width: r.width, height: r.height };
+      }
       function stageCenter() {
+        // 以實際舞台的 rect 計算中心（含 left/top）
         const r = stageRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
@@ -140,6 +151,7 @@
         if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
         return { h: sh, w: sh * imgRatio };
       }
+      // 圖片未變形時的「舞台左上角座標」（flex 置中 + contain）
       function imageTopLeft() {
         const r = stageRect();
         return {
@@ -147,6 +159,7 @@
           y: r.top + (r.height - baseH) / 2,
         };
       }
+      // client -> 圖片本地座標（未縮放）
       function clientToImagePoint(clientX, clientY) {
         const L = imageTopLeft();
         const ix = (clientX - L.x - tx) / scale;
@@ -154,11 +167,11 @@
         return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
       }
       function recomputeBaseSize() {
-        const r = stageRect();
+        const { width: sw, height: sh } = stageSize(); // 優先使用 visualViewport 尺寸
         const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
         const nh = viewer.naturalHeight || viewer.height || viewer.offsetHeight;
-        if (!nw || !nh || !r.width || !r.height) return;
-        const s = fitContain(r.width, r.height, nw, nh);
+        if (!nw || !nh || !sw || !sh) return;
+        const s = fitContain(sw, sh, nw, nh);
         baseW = s.w;
         baseH = s.h;
         commit(true);
@@ -176,47 +189,42 @@
       }
 
       /**
-       * 舞台本地坐標夾限（居中 + translate + scale 的對稱邊界）
-       * 假設內容被居中，translate 是在居中位置的偏移。
-       * 內容尺寸：contentW/H = baseW/H * scale
-       * 舞台尺寸：stageW/H
-       * 邊界應允許：當內容比舞台大時，translate 可在 ±(內容-舞台)/2 範圍內移動。
+       * 精準邊界夾限（含 L.x/L.y）：
+       * - 以舞台的 rect 與未縮放時居中的左上角 L.x/L.y 作為基準
+       * - 當內容（baseW/baseH * scale）大於舞台時，允許在不露黑邊的範圍內平移
        */
       function clampTranslate() {
         const r = stageRect();
-        const stageW = r.width;
-        const stageH = r.height;
+        const L = imageTopLeft();
         const contentW = baseW * scale;
         const contentH = baseH * scale;
 
         // 水平
-        if (contentW > stageW) {
-          const halfOverW = (contentW - stageW) / 2;
-          const minTx = -halfOverW - EPS;
-          const maxTx = halfOverW + EPS;
+        if (contentW > r.width) {
+          const minTx = r.right - L.x - contentW - EPS; // 右貼齊
+          const maxTx = r.left - L.x + EPS; // 左貼齊
           tx = clamp(tx, minTx, maxTx);
         } else {
-          // 內容未超出舞台：保持居中
-          tx = 0;
+          tx = 0; // 內容未超出舞台：保持居中
         }
 
         // 垂直
-        if (contentH > stageH) {
-          const halfOverH = (contentH - stageH) / 2;
-          const minTy = -halfOverH - EPS;
-          const maxTy = halfOverH + EPS;
+        if (contentH > r.height) {
+          const minTy = r.bottom - L.y - contentH - EPS; // 底貼齊
+          const maxTy = r.top - L.y + EPS; // 頂貼齊
           ty = clamp(ty, minTy, maxTy);
         } else {
           ty = 0;
         }
       }
 
+      // 切換互動模式
       function setInteractionMode() {
         if (scale === 1) {
-          viewer.style.touchAction = "pan-y pinch-zoom";
+          viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生
           viewer.style.pointerEvents = "auto";
         } else {
-          viewer.style.touchAction = "none";
+          viewer.style.touchAction = "none"; // 縮放中：自訂手勢
           viewer.style.pointerEvents = "auto";
         }
       }
@@ -251,6 +259,7 @@
         pre.src = images[(idx + 1) % images.length];
       }
 
+      // 左右半邊換頁（僅 scale===1 時）
       function handlePositionalClick(clientX) {
         if (scale !== 1) return;
         const r = stageRect();
@@ -258,6 +267,7 @@
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
+      // 以圖片座標為中心縮放
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
@@ -279,6 +289,7 @@
 
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
+          // 雙擊：未縮放 -> 放大；已縮放 -> 還原
           zoomAtImagePoint(scale > 1 ? 1 : 2, e.clientX, e.clientY);
           lastTap = 0;
           return;
@@ -494,7 +505,7 @@
           e.preventDefault();
           show(idx - 1);
         } else if (key === "ArrowRight") {
-          e.prevent止;
+          e.preventDefault();
           show(idx + 1);
         } else if (key === "Home") {
           e.preventDefault();
@@ -529,15 +540,7 @@
 
       // ===== Tap（左右半邊切換，掛在 stage）=====
       stage.addEventListener("pointerdown", (e) => {
-        if (e.buttons && e.buttons !== 1) return;
-
-        if (now - lastTap < DOUBLE_TAP_MS) {
-          if (scale === 1) show(idx + 1);
-          else resetTransform();
-          lastTap = 0;
-          return;
-        }
-
+        if (e.buttons && e.buttons !== 1) return; // 只看主鍵
         tapStartX = e.clientX;
         tapStartY = e.clientY;
         tapStartTime = performance.now();
@@ -550,6 +553,7 @@
         tapStartX = tapStartY = null;
         tapStartTime = 0;
 
+        // 雙閾值 + 時間條件（手機更可靠）
         if (
           dx <= CLICK_THRESHOLD_PX &&
           dy <= CLICK_THRESHOLD_PY &&
@@ -564,14 +568,18 @@
       window.addEventListener("resize", () => {
         recomputeBaseSize();
       });
-      try {
-        const ro = new ResizeObserver(() => recomputeBaseSize());
-        ro.observe(stage);
-      } catch (_) {}
+      if (window.visualViewport) {
+        // 在工具列顯示/隱藏或鍵盤彈出時能即時重算
+        window.visualViewport.addEventListener("resize", () => {
+          recomputeBaseSize();
+        });
+      }
+      window.addEventListener("orientationchange", () => {
+        recomputeBaseSize();
+      });
 
       // ===== 初始化 =====
       show(0);
     </script>
   </body>
 </html>
-``
