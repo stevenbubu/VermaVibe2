@@ -2,8 +2,11 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.49</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Ver 0.0.50</title>
     <style>
       html,
       body {
@@ -15,6 +18,8 @@
       .stage {
         position: fixed;
         inset: 0;
+        /* 以動態視窗高度避免手機直立時 100vh 的工具列誤差 */
+        height: 100dvh;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -24,7 +29,7 @@
       }
       .slide {
         max-width: 100vw;
-        max-height: 100vh;
+        max-height: 100dvh; /* 一併改成動態視窗高度 */
         width: auto;
         height: auto;
         object-fit: contain;
@@ -84,7 +89,6 @@
       const PAN_SPEED_BASE = 1.6,
         EPS = 0.75;
 
-      // Tap 閾值（手機較寬鬆）
       const isTouchDevice = navigator.maxTouchPoints > 0;
       const CLICK_THRESHOLD_PX = isTouchDevice ? 20 : 10;
       const CLICK_THRESHOLD_PY = isTouchDevice ? 20 : 10;
@@ -103,21 +107,17 @@
       let rafId = null,
         lastTap = 0;
 
-      // Pointer 狀態（桌面/觸控板/筆）
       const pointers = new Map();
       let dragStart = null;
 
-      // Touch Fallback（行動裝置）
-      let touchDragStart = null; // 單指拖曳
-      let touchStartDist = 0; // pinch 起始距離
-      let touchStartScale = 1; // pinch 起始縮放
-      let touchAnchorP = { x: 0, y: 0 }; // pinch 錨點（圖片座標）
+      let touchDragStart = null;
+      let touchStartDist = 0;
+      let touchStartScale = 1;
+      let touchAnchorP = { x: 0, y: 0 };
 
-      // contain 尺寸快取
       let baseW = 0,
         baseH = 0;
 
-      // tap 檢測（掛在 stage）
       let tapStartX = null,
         tapStartY = null,
         tapStartTime = 0;
@@ -125,7 +125,6 @@
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-      // ✅ 修正 y 的 /2
       const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
       function stageRect() {
@@ -176,23 +175,36 @@
         });
       }
 
-      // 非對稱邊界 + 內容小於舞台時置中
+      /**
+       * 舞台本地坐標夾限（居中 + translate + scale 的對稱邊界）
+       * 假設內容被居中，translate 是在居中位置的偏移。
+       * 內容尺寸：contentW/H = baseW/H * scale
+       * 舞台尺寸：stageW/H
+       * 邊界應允許：當內容比舞台大時，translate 可在 ±(內容-舞台)/2 範圍內移動。
+       */
       function clampTranslate() {
         const r = stageRect();
-        const L = imageTopLeft();
+        const stageW = r.width;
+        const stageH = r.height;
         const contentW = baseW * scale;
         const contentH = baseH * scale;
 
-        if (contentW > r.width) {
-          const minTx = r.right - L.x - contentW - EPS;
-          const maxTx = r.left - L.x + EPS;
+        // 水平
+        if (contentW > stageW) {
+          const halfOverW = (contentW - stageW) / 2;
+          const minTx = -halfOverW - EPS;
+          const maxTx = halfOverW + EPS;
           tx = clamp(tx, minTx, maxTx);
         } else {
+          // 內容未超出舞台：保持居中
           tx = 0;
         }
-        if (contentH > r.height) {
-          const minTy = r.bottom - L.y - contentH - EPS;
-          const maxTy = r.top - L.y + EPS;
+
+        // 垂直
+        if (contentH > stageH) {
+          const halfOverH = (contentH - stageH) / 2;
+          const minTy = -halfOverH - EPS;
+          const maxTy = halfOverH + EPS;
           ty = clamp(ty, minTy, maxTy);
         } else {
           ty = 0;
@@ -201,10 +213,10 @@
 
       function setInteractionMode() {
         if (scale === 1) {
-          viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生
+          viewer.style.touchAction = "pan-y pinch-zoom";
           viewer.style.pointerEvents = "auto";
         } else {
-          viewer.style.touchAction = "none"; // 縮放中：自訂手勢
+          viewer.style.touchAction = "none";
           viewer.style.pointerEvents = "auto";
         }
       }
@@ -239,7 +251,6 @@
         pre.src = images[(idx + 1) % images.length];
       }
 
-      // 左右半邊換頁（僅 scale===1 時）
       function handlePositionalClick(clientX) {
         if (scale !== 1) return;
         const r = stageRect();
@@ -247,7 +258,6 @@
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // 以圖片座標為中心縮放
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
@@ -258,7 +268,7 @@
         commit(true);
       }
 
-      // ===== 桌面：Pointer（滑鼠/筆）=====
+      // ===== Pointer（滑鼠/筆/觸控板）=====
       viewer.addEventListener("pointerdown", (e) => {
         pointers.set(e.pointerId, {
           x: e.clientX,
@@ -323,7 +333,6 @@
       });
 
       viewer.addEventListener("pointerup", (e) => {
-        // 不在這裡觸發換頁，避免與 stage 的 tap 判斷衝突
         pointers.delete(e.pointerId);
         if (e.pointerType !== "touch")
           viewer.releasePointerCapture(e.pointerId);
@@ -341,7 +350,7 @@
         setInteractionMode();
       });
 
-      // ===== 手機：Touch Fallback（多指更滑順）=====
+      // ===== Touch Fallback（行動裝置多指更滑順）=====
       if (isTouchDevice) {
         viewer.addEventListener(
           "touchstart",
@@ -485,7 +494,7 @@
           e.preventDefault();
           show(idx - 1);
         } else if (key === "ArrowRight") {
-          e.preventDefault();
+          e.prevent止;
           show(idx + 1);
         } else if (key === "Home") {
           e.preventDefault();
@@ -520,22 +529,27 @@
 
       // ===== Tap（左右半邊切換，掛在 stage）=====
       stage.addEventListener("pointerdown", (e) => {
-        if (e.buttons && e.buttons !== 1) return; // 只看主鍵
+        if (e.buttons && e.buttons !== 1) return;
+
+        if (now - lastTap < DOUBLE_TAP_MS) {
+          if (scale === 1) show(idx + 1);
+          else resetTransform();
+          lastTap = 0;
+          return;
+        }
+
         tapStartX = e.clientX;
         tapStartY = e.clientY;
         tapStartTime = performance.now();
       });
       stage.addEventListener("pointerup", (e) => {
-        // 僅在未縮放狀態判斷 tap
         if (scale !== 1) return;
-
         const dx = Math.abs(e.clientX - (tapStartX ?? e.clientX));
         const dy = Math.abs(e.clientY - (tapStartY ?? e.clientY));
         const dt = performance.now() - (tapStartTime || performance.now());
         tapStartX = tapStartY = null;
         tapStartTime = 0;
 
-        // 雙閾值 + 時間條件（手機更可靠）
         if (
           dx <= CLICK_THRESHOLD_PX &&
           dy <= CLICK_THRESHOLD_PY &&
@@ -560,3 +574,4 @@
     </script>
   </body>
 </html>
+``
