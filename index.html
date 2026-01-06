@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.39</title>
+    <title>Ver 0.0.40</title>
     <style>
       html,
       body {
@@ -19,7 +19,7 @@
         justify-content: center;
         user-select: none;
         background: #000;
-        overflow: hidden; /* 平移時不溢出 */
+        overflow: hidden;
       }
       .slide {
         max-width: 100vw;
@@ -29,16 +29,15 @@
         object-fit: contain;
         background: #000;
         will-change: transform;
-        transform-origin: 0 0; /* translate + scale 以左上角為原點 */
-        position: relative; /* 讓 z-index 生效 */
-        z-index: 2; /* 圖片在 overlay 上方，避免手勢被擋 */
+        transform-origin: 0 0;
+        position: relative;
+        z-index: 2;
       }
       .overlay {
         position: absolute;
         inset: 0;
         cursor: pointer;
         background: transparent;
-        /* 未縮放時允許垂直捲動 + 原生 pinch-zoom；縮放中改由 JS 控制 */
         touch-action: pan-y pinch-zoom;
         z-index: 1;
       }
@@ -75,9 +74,7 @@
     </div>
 
     <script>
-      // ------------------------------
       // 設定
-      // ------------------------------
       const count = 12;
       const folder = "images/VermaVibe_20251217";
       const images = Array.from(
@@ -89,21 +86,16 @@
       const MAX_SCALE = 6;
       const DOUBLE_TAP_MS = 300;
       const WHEEL_ZOOM_FACTOR = 1.1;
-      const PAN_SPEED = 1; // 桌面滾輪平移速度
+      const PAN_SPEED = 1.25; // 調高一點
 
-      // ------------------------------
       // DOM
-      // ------------------------------
       const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
       const overlay = document.querySelector(".overlay");
 
-      // ------------------------------
       // 狀態
-      // ------------------------------
       let idx = 0;
-
       let scale = 1;
       let tx = 0,
         ty = 0;
@@ -111,7 +103,7 @@
       let rafId = null;
       let lastTap = 0;
 
-      const pointers = new Map(); // pointerId -> {x,y,type}
+      const pointers = new Map();
       let dragStart = null;
 
       // pinch 暫存
@@ -121,9 +113,7 @@
       let startMid = { x: 0, y: 0 };
       let startDist = 0;
 
-      // ------------------------------
-      // 幾何工具
-      // ------------------------------
+      // 工具
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
       const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -135,25 +125,14 @@
         const r = stageRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
-      // 計算 object-fit: contain 的顯示寬高
-      function fitContain(sw, sh, nw, nh) {
-        const imgRatio = nw / nh;
-        const stageRatio = sw / sh;
-        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
-        return { h: sh, w: sh * imgRatio };
-      }
+
+      // 更精準：用目前排版結果反推顯示尺寸（未縮放）
       function getDisplayedSize() {
-        const r = stageRect();
-        const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
-        const nh = viewer.naturalHeight || viewer.height || viewer.offsetHeight;
-        if (!nw || !nh)
-          return { w: viewer.offsetWidth, h: viewer.offsetHeight }; // fallback
-        return fitContain(r.width, r.height, nw, nh);
+        const rect = viewer.getBoundingClientRect();
+        return { w: rect.width / scale, h: rect.height / scale };
       }
 
-      // ------------------------------
-      // 視覺更新（合併到一個 rAF）
-      // ------------------------------
+      // 視覺更新
       function commit(needsClamp = true) {
         if (needsClamp) clampTranslate();
         if (rafId) return;
@@ -181,10 +160,10 @@
       function setInteractionMode() {
         if (scale === 1) {
           overlay.style.touchAction = "pan-y pinch-zoom";
-          overlay.style.pointerEvents = "auto"; // 未縮放：左右半邊可換頁
+          overlay.style.pointerEvents = "auto";
         } else {
           overlay.style.touchAction = "none";
-          overlay.style.pointerEvents = "none"; // 縮放中：停用左右半邊換頁
+          overlay.style.pointerEvents = "none";
         }
       }
 
@@ -195,16 +174,12 @@
         commit();
       }
 
-      // ------------------------------
       // 顯示圖片
-      // ------------------------------
       function show(i) {
         idx = (i + images.length) % images.length;
         const url = images[idx];
 
-        // 提示：第一張出現，其餘隱藏
         hint.classList.toggle("hidden", idx !== 0);
-
         resetTransform();
 
         viewer.src = url;
@@ -214,27 +189,22 @@
           hint.classList.remove("hidden");
         };
 
-        // 預載下一張
         const pre = new Image();
         pre.src = images[(idx + 1) % images.length];
       }
 
-      // 左右半邊切換
       function handlePositionalClick(clientX) {
         const r = stageRect();
         const leftHalf = clientX - r.left < r.width / 2;
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // ------------------------------
       // 縮放（以某點為中心）
-      // ------------------------------
       function zoomAtPoint(targetScale, clientX, clientY) {
         const prevScale = scale;
         targetScale = clamp(targetScale, MIN_SCALE, MAX_SCALE);
 
         const center = stageCenter();
-        // 以游標/觸點相對舞台中心補償平移，讓視覺中心停留在指向位置
         tx += (clientX - center.x) * (1 - targetScale / prevScale);
         ty += (clientY - center.y) * (1 - targetScale / prevScale);
 
@@ -242,9 +212,7 @@
         commit(true);
       }
 
-      // ------------------------------
-      // 事件（viewer 上的手勢）
-      // ------------------------------
+      // viewer 手勢
       viewer.addEventListener("pointerdown", (e) => {
         pointers.set(e.pointerId, {
           x: e.clientX,
@@ -253,7 +221,6 @@
         });
         viewer.setPointerCapture(e.pointerId);
 
-        // 雙擊（DOUBLE_TAP_MS 內）
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
           zoomAtPoint(scale > 1 ? 1 : 2, e.clientX, e.clientY);
@@ -263,7 +230,6 @@
         lastTap = now;
 
         if (pointers.size === 1) {
-          // 縮放中：單指拖曳
           if (scale > 1) {
             const p = pointers.get(e.pointerId);
             dragStart = { x: p.x, y: p.y, tx0: tx, ty0: ty };
@@ -275,7 +241,7 @@
           startMid = midpoint(pts[0], pts[1]);
           startTx = tx;
           startTy = ty;
-          setInteractionMode(); // 進入縮放模式：關閉 overlay 事件
+          setInteractionMode();
         }
       });
 
@@ -288,7 +254,6 @@
         });
 
         if (pointers.size === 2) {
-          // pinch
           const pts = [...pointers.values()];
           const curDist = distance(pts[0], pts[1]);
           const mid = midpoint(pts[0], pts[1]);
@@ -298,7 +263,6 @@
             MAX_SCALE
           );
 
-          // 以中點為縮放中心補償
           tx =
             startTx +
             (mid.x - startMid.x) +
@@ -311,7 +275,6 @@
           scale = newScale;
           commit(true);
         } else if (pointers.size === 1 && dragStart && scale > 1) {
-          // 單指拖曳
           const cur = pointers.get(e.pointerId);
           tx = dragStart.tx0 + (cur.x - dragStart.x);
           ty = dragStart.ty0 + (cur.y - dragStart.y);
@@ -323,11 +286,8 @@
         pointers.delete(e.pointerId);
         viewer.releasePointerCapture(e.pointerId);
 
-        if (pointers.size < 2) {
-          startDist = 0;
-        }
+        if (pointers.size < 2) startDist = 0;
         if (pointers.size === 0) {
-          // 未縮放時：圖片上也支援左右半邊換頁
           if (scale === 1 && !dragStart) handlePositionalClick(e.clientX);
           dragStart = null;
           setInteractionMode();
@@ -341,50 +301,45 @@
         setInteractionMode();
       });
 
-      // ------------------------------
-      // overlay：只管未縮放時的左右半邊換頁
-      // ------------------------------
+      // overlay：未縮放時的左右半邊換頁
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
       overlay.addEventListener("pointerup", (e) => {
         if (scale === 1) handlePositionalClick(e.clientX);
       });
 
-      // ------------------------------
-      // 桌面：滾輪（縮放或平移）
-      // ------------------------------
-      stage.addEventListener(
-        "wheel",
-        (e) => {
-          // Ctrl + 滾輪：縮放圖片（避免瀏覽器整頁縮放）
-          if (e.ctrlKey) {
-            e.preventDefault();
-            const factor =
-              Math.sign(e.deltaY) > 0
-                ? 1 / WHEEL_ZOOM_FACTOR
-                : WHEEL_ZOOM_FACTOR;
-            zoomAtPoint(
-              clamp(scale * factor, MIN_SCALE, MAX_SCALE),
-              e.clientX,
-              e.clientY
-            );
-            return;
-          }
-          // 縮放中：滾輪用來平移（能下拉到最底）
-          if (scale > 1) {
-            e.preventDefault();
-            tx -= e.deltaX * PAN_SPEED;
-            ty -= e.deltaY * PAN_SPEED;
-            commit(true);
-            return;
-          }
-          // scale === 1：不攔截（舞台 fixed，通常頁面無滾動高度）
-        },
-        { passive: false }
-      );
+      // 桌面：滾輪（縮放或平移）— 同時監聽 stage & viewer
+      function getPanSpeed(e) {
+        const base = PAN_SPEED;
+        const magnitude = Math.max(Math.abs(e.deltaY), Math.abs(e.deltaX));
+        const gain = 1 + Math.min(magnitude / 200, 2); // 最高約 3x
+        return base * gain;
+      }
 
-      // ------------------------------
+      const onWheel = (e) => {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          const factor =
+            Math.sign(e.deltaY) > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR;
+          zoomAtPoint(
+            clamp(scale * factor, MIN_SCALE, MAX_SCALE),
+            e.clientX,
+            e.clientY
+          );
+          return;
+        }
+        if (scale > 1) {
+          e.preventDefault();
+          const speed = getPanSpeed(e);
+          tx -= e.deltaX * speed;
+          ty -= e.deltaY * speed;
+          commit(true);
+        }
+      };
+
+      stage.addEventListener("wheel", onWheel, { passive: false });
+      viewer.addEventListener("wheel", onWheel, { passive: false });
+
       // 鍵盤
-      // ------------------------------
       document.addEventListener("keydown", (e) => {
         const key = e.key;
         if (key === "ArrowLeft") {
@@ -424,9 +379,7 @@
         }
       });
 
-      // ------------------------------
       // 初始化
-      // ------------------------------
       show(0);
     </script>
   </body>
