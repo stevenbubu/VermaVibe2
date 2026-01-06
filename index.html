@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.42</title>
+    <title>Ver 0.0.43</title>
     <style>
       html,
       body {
@@ -31,7 +31,7 @@
         will-change: transform;
         transform-origin: 0 0;
         position: relative;
-        z-index: 2;
+        z-index: 2; /* 圖片在 overlay 上方 */
       }
       .overlay {
         position: absolute;
@@ -74,7 +74,7 @@
     </div>
 
     <script>
-      // 設定
+      // ===== 設定 =====
       const count = 12;
       const folder = "images/VermaVibe_20251217";
       const images = Array.from(
@@ -86,15 +86,16 @@
       const MAX_SCALE = 6;
       const DOUBLE_TAP_MS = 300;
       const WHEEL_ZOOM_FACTOR = 1.1;
-      const PAN_SPEED = 1.6; // 調高一點
+      const PAN_SPEED_BASE = 1.6; // 基礎平移速度
+      const EPS = 0.75; // 邊界容差（解決子像素「差一點」問題）
 
-      // DOM
+      // ===== DOM =====
       const viewer = document.getElementById("viewer");
       const stage = document.getElementById("stage");
       const hint = document.getElementById("hint");
       const overlay = document.querySelector(".overlay");
 
-      // 狀態
+      // ===== 狀態 =====
       let idx = 0;
       let scale = 1;
       let tx = 0,
@@ -113,7 +114,11 @@
       let startMid = { x: 0, y: 0 };
       let startDist = 0;
 
-      // 工具
+      // 未縮放的「顯示尺寸」快取（object-fit: contain 結果）
+      let baseW = 0,
+        baseH = 0;
+
+      // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
       const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -126,13 +131,28 @@
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
 
-      // 更精準：用目前排版結果反推顯示尺寸（未縮放）
-      function getDisplayedSize() {
-        const rect = viewer.getBoundingClientRect();
-        return { w: rect.width / scale, h: rect.height / scale };
+      // object-fit: contain 的顯示尺寸（未縮放）
+      function fitContain(sw, sh, nw, nh) {
+        const imgRatio = nw / nh;
+        const stageRatio = sw / sh;
+        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio }; // 寬受限
+        return { h: sh, w: sh * imgRatio }; // 高受限
       }
 
-      // 視覺更新
+      // 重新計算 baseW/baseH（圖片載入或舞台尺寸改變時）
+      function recomputeBaseSize() {
+        const r = stageRect();
+        const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
+        const nh = viewer.naturalHeight || viewer.height || viewer.offsetHeight;
+        if (!nw || !nh || !r.width || !r.height) return; // 等待圖片載入或舞台就緒
+        const s = fitContain(r.width, r.height, nw, nh);
+        baseW = s.w;
+        baseH = s.h;
+        // 尺寸變更後，重新 clamp 當前位移，避免突兀
+        commit(true);
+      }
+
+      // ===== 視覺更新（合併到一個 rAF）=====
       function commit(needsClamp = true) {
         if (needsClamp) clampTranslate();
         if (rafId) return;
@@ -145,13 +165,14 @@
 
       function clampTranslate() {
         const r = stageRect();
-        const { w, h } = getDisplayedSize();
 
-        const contentW = w * scale;
-        const contentH = h * scale;
+        // 內容尺寸（縮放後）
+        const contentW = baseW * scale;
+        const contentH = baseH * scale;
 
-        const maxOffsetX = Math.max(0, (contentW - r.width) / 2);
-        const maxOffsetY = Math.max(0, (contentH - r.height) / 2);
+        // 邊界：允許平移至四邊（加入極小容差 EPS）
+        const maxOffsetX = Math.max(0, (contentW - r.width) / 2) + EPS;
+        const maxOffsetY = Math.max(0, (contentH - r.height) / 2) + EPS;
 
         tx = clamp(tx, -maxOffsetX, maxOffsetX);
         ty = clamp(ty, -maxOffsetY, maxOffsetY);
@@ -160,10 +181,10 @@
       function setInteractionMode() {
         if (scale === 1) {
           overlay.style.touchAction = "pan-y pinch-zoom";
-          overlay.style.pointerEvents = "auto";
+          overlay.style.pointerEvents = "auto"; // 未縮放：左右半邊可換頁
         } else {
           overlay.style.touchAction = "none";
-          overlay.style.pointerEvents = "none";
+          overlay.style.pointerEvents = "none"; // 縮放中：停用左右半邊換頁
         }
       }
 
@@ -174,7 +195,7 @@
         commit();
       }
 
-      // 顯示圖片
+      // ===== 顯示圖片 =====
       function show(i) {
         idx = (i + images.length) % images.length;
         const url = images[idx];
@@ -184,11 +205,18 @@
 
         viewer.src = url;
         viewer.alt = `slide ${idx + 1}`;
+
+        // 圖片載入後才能取得 naturalWidth/Height
+        viewer.onload = () => {
+          recomputeBaseSize();
+        };
+
         viewer.onerror = () => {
           hint.textContent = `載入失敗：${url}（點擊可跳下一張）`;
           hint.classList.remove("hidden");
         };
 
+        // 預載下一張
         const pre = new Image();
         pre.src = images[(idx + 1) % images.length];
       }
@@ -199,20 +227,18 @@
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // 縮放（以某點為中心）
+      // ===== 縮放（以某點為中心）=====
       function zoomAtPoint(targetScale, clientX, clientY) {
         const prevScale = scale;
         targetScale = clamp(targetScale, MIN_SCALE, MAX_SCALE);
-
         const center = stageCenter();
         tx += (clientX - center.x) * (1 - targetScale / prevScale);
         ty += (clientY - center.y) * (1 - targetScale / prevScale);
-
         scale = targetScale;
         commit(true);
       }
 
-      // viewer 手勢
+      // ===== viewer 手勢 =====
       viewer.addEventListener("pointerdown", (e) => {
         pointers.set(e.pointerId, {
           x: e.clientX,
@@ -301,18 +327,36 @@
         setInteractionMode();
       });
 
-      // overlay：未縮放時的左右半邊換頁
+      // ===== overlay：未縮放時的左右半邊換頁 =====
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
       overlay.addEventListener("pointerup", (e) => {
         if (scale === 1) handlePositionalClick(e.clientX);
       });
 
-      // 桌面：滾輪（縮放或平移）— 同時監聽 stage & viewer
+      // ===== 滾輪（規範化 + 平滑增益）=====
+      function normalizeMagnitude(e) {
+        let dx = e.deltaX,
+          dy = e.deltaY;
+        const LINE = 40; // 行→像素近似
+        const PAGE = Math.max(window.innerHeight, 600); // 頁→像素近似
+        if (e.deltaMode === 1) {
+          dx *= LINE;
+          dy *= LINE;
+        } else if (e.deltaMode === 2) {
+          dx *= PAGE;
+          dy *= PAGE;
+        }
+        return Math.max(Math.abs(dx), Math.abs(dy));
+      }
+
+      function panGain(magnitude) {
+        const maxExtra = 2.5; // 額外增益上限（總增益最高 ≈ 1 + 2.5 = 3.5×）
+        const k = 1 / 180; // 靈敏度（越大越快接近上限）
+        return 1 + maxExtra * Math.tanh(k * magnitude);
+      }
+
       function getPanSpeed(e) {
-        const base = PAN_SPEED;
-        const magnitude = Math.max(Math.abs(e.deltaY), Math.abs(e.deltaX));
-        const gain = 1 + 2.5 * Math.tanh(magnitude / 180); // 最高約 3x
-        return base * gain;
+        return PAN_SPEED_BASE * panGain(normalizeMagnitude(e));
       }
 
       const onWheel = (e) => {
@@ -331,15 +375,14 @@
           e.preventDefault();
           const speed = getPanSpeed(e);
           tx -= e.deltaX * speed;
-          ty -= e.deltaY * speed;
+          ty -= e.deltaY * speed; // 下拉（正 deltaY）→ ty 減少 → 看到更下方
           commit(true);
         }
       };
-
       stage.addEventListener("wheel", onWheel, { passive: false });
       viewer.addEventListener("wheel", onWheel, { passive: false });
 
-      // 鍵盤
+      // ===== 鍵盤 =====
       document.addEventListener("keydown", (e) => {
         const key = e.key;
         if (key === "ArrowLeft") {
@@ -379,7 +422,18 @@
         }
       });
 
-      // 初始化
+      // ===== 監聽：舞台尺寸變更（視窗縮放／裝置旋轉）=====
+      window.addEventListener("resize", () => {
+        recomputeBaseSize();
+      });
+      try {
+        const ro = new ResizeObserver(() => recomputeBaseSize());
+        ro.observe(stage);
+      } catch (_) {
+        /* 某些舊版瀏覽器無 ResizeObserver，僅用 resize 事件 */
+      }
+
+      // ===== 初始化 =====
       show(0);
     </script>
   </body>
