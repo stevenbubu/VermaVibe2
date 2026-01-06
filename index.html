@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.44</title>
+    <title>Ver 0.0.45</title>
     <style>
       html,
       body {
@@ -31,7 +31,7 @@
         will-change: transform;
         transform-origin: 0 0;
         position: relative;
-        z-index: 2; /* 圖片在 overlay 上方 */
+        z-index: 2;
       }
       .overlay {
         position: absolute;
@@ -82,12 +82,12 @@
         (_, i) => `${folder}/${String(i + 1)}.PNG`
       );
 
-      const MIN_SCALE = 1;
-      const MAX_SCALE = 6;
-      const DOUBLE_TAP_MS = 300;
-      const WHEEL_ZOOM_FACTOR = 1.1;
-      const PAN_SPEED_BASE = 1.6;
-      const EPS = 0.75;
+      const MIN_SCALE = 1,
+        MAX_SCALE = 6;
+      const DOUBLE_TAP_MS = 300,
+        WHEEL_ZOOM_FACTOR = 1.1;
+      const PAN_SPEED_BASE = 1.6,
+        EPS = 0.75;
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
@@ -100,17 +100,16 @@
       let scale = 1;
       let tx = 0,
         ty = 0;
-
-      let rafId = null;
-      let lastTap = 0;
+      let rafId = null,
+        lastTap = 0;
 
       const pointers = new Map();
       let dragStart = null;
 
       // pinch 暫存
-      let startDist = 0;
-      let startScale = 1;
-      let anchorP = { x: 0, y: 0 }; // 🟨 圖片座標錨點（在 pinch 開始時記錄）
+      let startDist = 0,
+        startScale = 1;
+      let anchorP = { x: 0, y: 0 };
 
       // 未縮放的顯示尺寸快取
       let baseW = 0,
@@ -129,7 +128,14 @@
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
 
-      // 圖片未變形時的「畫面左上角位置」：flex 置中 + object-fit: contain
+      function fitContain(sw, sh, nw, nh) {
+        const imgRatio = nw / nh,
+          stageRatio = sw / sh;
+        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio }; // 寬受限
+        return { h: sh, w: sh * imgRatio }; // 高受限
+      }
+
+      // 圖片未變形時的「畫面左上角」（flex 置中 + contain）
       function imageTopLeft() {
         const r = stageRect();
         return {
@@ -138,27 +144,14 @@
         };
       }
 
-      // 將 client 座標轉成圖片本地座標（未縮放）
+      // client -> 圖片本地座標（未縮放）
       function clientToImagePoint(clientX, clientY) {
         const L = imageTopLeft();
         const ix = (clientX - L.x - tx) / scale;
         const iy = (clientY - L.y - ty) / scale;
-        // 可選：限制在圖片範圍內，避免錨點飄出
-        return {
-          x: clamp(ix, 0, baseW),
-          y: clamp(iy, 0, baseH),
-        };
+        return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
       }
 
-      // object-fit: contain 的顯示尺寸（未縮放）
-      function fitContain(sw, sh, nw, nh) {
-        const imgRatio = nw / nh;
-        const stageRatio = sw / sh;
-        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio }; // 寬受限
-        return { h: sh, w: sh * imgRatio }; // 高受限
-      }
-
-      // 重新計算 baseW/baseH（圖片載入或舞台尺寸改變時）
       function recomputeBaseSize() {
         const r = stageRect();
         const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
@@ -181,16 +174,32 @@
         });
       }
 
+      // ✅ 以舞台四邊 + 圖片左上角 + 縮放後內容尺寸計算「非對稱」邊界
       function clampTranslate() {
         const r = stageRect();
+        const L = imageTopLeft();
+
         const contentW = baseW * scale;
         const contentH = baseH * scale;
 
-        const maxOffsetX = Math.max(0, (contentW - r.width) / 2) + EPS;
-        const maxOffsetY = Math.max(0, (contentH - r.height) / 2) + EPS;
+        // 水平：內容寬 > 舞台寬 才需要覆蓋；否則回到置中（避免黑邊被拖動）
+        if (contentW > r.width) {
+          const minTx = r.right - L.x - contentW - EPS; // 不露右邊黑
+          const maxTx = r.left - L.x + EPS; // 不露左邊黑
+          tx = clamp(tx, minTx, maxTx);
+        } else {
+          // 內容比舞台窄：維持置中
+          tx = 0;
+        }
 
-        tx = clamp(tx, -maxOffsetX, maxOffsetX);
-        ty = clamp(ty, -maxOffsetY, maxOffsetY);
+        // 垂直：內容高 > 舞台高 才需要覆蓋；否則回到置中
+        if (contentH > r.height) {
+          const minTy = r.bottom - L.y - contentH - EPS; // 不露下邊黑
+          const maxTy = r.top - L.y + EPS; // 不露上邊黑
+          ty = clamp(ty, minTy, maxTy);
+        } else {
+          ty = 0;
+        }
       }
 
       function setInteractionMode() {
@@ -214,13 +223,11 @@
       function show(i) {
         idx = (i + images.length) % images.length;
         const url = images[idx];
-
         hint.classList.toggle("hidden", idx !== 0);
         resetTransform();
 
         viewer.src = url;
         viewer.alt = `slide ${idx + 1}`;
-
         viewer.onload = () => {
           recomputeBaseSize();
         };
@@ -241,15 +248,11 @@
 
       // ===== 以「圖片座標」為中心縮放 =====
       function zoomAtImagePoint(targetScale, clientX, clientY) {
-        const s0 = scale;
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
-        const p = clientToImagePoint(clientX, clientY); // 觸點對應的圖片座標（未縮放）
-
-        // 讓圖片座標 p 在新縮放下仍落在 clientX/clientY
+        const p = clientToImagePoint(clientX, clientY); // 觸點對應圖片座標
         tx = clientX - L.x - p.x * s1;
         ty = clientY - L.y - p.y * s1;
-
         scale = s1;
         commit(true);
       }
@@ -281,9 +284,7 @@
           startDist = distance(pts[0], pts[1]);
           startScale = scale;
           const mid = midpoint(pts[0], pts[1]);
-
-          // 🟨 記錄「起始中點」對應的圖片錨點座標
-          anchorP = clientToImagePoint(mid.x, mid.y);
+          anchorP = clientToImagePoint(mid.x, mid.y); // 記錄錨點
           setInteractionMode();
         }
       });
@@ -300,15 +301,12 @@
           const pts = [...pointers.values()];
           const curDist = distance(pts[0], pts[1]);
           const mid = midpoint(pts[0], pts[1]);
-
-          // 新縮放
           const s1 = clamp(
             startScale * (curDist / startDist),
             MIN_SCALE,
             MAX_SCALE
           );
 
-          // 以「圖片座標錨點」為中心，讓 anchorP 對齊當前的 pinch 中點
           const L = imageTopLeft();
           tx = mid.x - L.x - anchorP.x * s1;
           ty = mid.y - L.y - anchorP.y * s1;
@@ -326,7 +324,6 @@
       viewer.addEventListener("pointerup", (e) => {
         pointers.delete(e.pointerId);
         viewer.releasePointerCapture(e.pointerId);
-
         if (pointers.size === 0) {
           if (scale === 1 && !dragStart) handlePositionalClick(e.clientX);
           dragStart = null;
@@ -346,7 +343,7 @@
         if (scale === 1) handlePositionalClick(e.clientX);
       });
 
-      // ===== 滾輪（以圖片座標為中心縮放／平移）=====
+      // ===== 滾輪：縮放／平移 =====
       function normalizeMagnitude(e) {
         let dx = e.deltaX,
           dy = e.deltaY;
@@ -373,7 +370,6 @@
           e.preventDefault();
           const factor =
             Math.sign(e.deltaY) > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR;
-          // 🟨 以游標位置的「圖片座標」為縮放中心
           zoomAtImagePoint(
             clamp(scale * factor, MIN_SCALE, MAX_SCALE),
             e.clientX,
