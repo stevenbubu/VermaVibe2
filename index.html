@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.41</title>
+    <title>Ver 0.0.42</title>
     <style>
       html,
       body {
@@ -311,7 +311,7 @@
       function getPanSpeed(e) {
         const base = PAN_SPEED;
         const magnitude = Math.max(Math.abs(e.deltaY), Math.abs(e.deltaX));
-        const gain = 1 + Math.min(magnitude / 200, 2); // 最高約 3x
+        const gain = 1 + 2.5 * Math.tanh(magnitude / 180); // 最高約 3x
         return base * gain;
       }
 
