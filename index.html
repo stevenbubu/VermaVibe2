@@ -3,13 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.46</title>
+    <title>Ver 0.0.47</title>
     <style>
       html,
       body {
         height: 100%;
         margin: 0;
         background: #000;
+        /* 防止瀏覽器在邊界時的橡皮筋效應干擾（支援度佳） */
+        overscroll-behavior: contain;
       }
       .stage {
         position: fixed;
@@ -32,8 +34,11 @@
         transform-origin: 0 0;
         position: relative;
         z-index: 2;
-        /* 預設給行動裝置更友善的設定（後續用 JS 依 scale 切換） */
+        /* 初始：允許捏合與垂直捲動；縮放中由 JS 改為 none */
         touch-action: pan-y pinch-zoom;
+        /* 開 GPU 合成層，讓位移更順 */
+        backface-visibility: hidden;
+        translate: 0 0; /* 或 transform: translateZ(0); */
       }
       .overlay {
         position: absolute;
@@ -105,13 +110,15 @@
       let rafId = null,
         lastTap = 0;
 
+      // 滑鼠/筆：Pointer 狀態
       const pointers = new Map();
       let dragStart = null;
 
-      // pinch 暫存
-      let startDist = 0,
-        startScale = 1;
-      let anchorP = { x: 0, y: 0 };
+      // Touch 狀態（行動裝置）
+      let touchDragStart = null; // 單指拖曳
+      let touchStartDist = 0; // pinch 起始距離
+      let touchStartScale = 1; // pinch 起始縮放
+      let touchAnchorP = { x: 0, y: 0 }; // pinch 圖片錨點
 
       // 未縮放的顯示尺寸快取
       let baseW = 0,
@@ -179,7 +186,7 @@
         });
       }
 
-      // ✅ 非對稱邊界（不露黑邊）+ 內容小於舞台時置中
+      // 非對稱邊界（不露黑邊）+ 內容小於舞台時置中
       function clampTranslate() {
         const r = stageRect();
         const L = imageTopLeft();
@@ -203,7 +210,7 @@
         }
       }
 
-      // 🔧 關鍵修正：viewer 也要切換 touch-action（行動裝置）
+      // 🔧 同時切 viewer/overlay 的 touch-action（關鍵）
       function setInteractionMode() {
         if (scale === 1) {
           overlay.style.touchAction = "pan-y pinch-zoom";
@@ -261,14 +268,15 @@
         commit(true);
       }
 
-      // ===== viewer 手勢（含 pinch）=====
+      // ===== 桌面：Pointer（滑鼠/筆）=====
       viewer.addEventListener("pointerdown", (e) => {
         pointers.set(e.pointerId, {
           x: e.clientX,
           y: e.clientY,
           type: e.pointerType,
         });
-        viewer.setPointerCapture(e.pointerId);
+        // 只對非觸控指標使用 pointer capture（避免 iOS 多指卡頓）
+        if (e.pointerType !== "touch") viewer.setPointerCapture(e.pointerId);
 
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
@@ -285,11 +293,8 @@
           }
         } else if (pointers.size === 2) {
           const pts = [...pointers.values()];
-          startDist = distance(pts[0], pts[1]);
-          startScale = scale;
           const mid = midpoint(pts[0], pts[1]);
-          anchorP = clientToImagePoint(mid.x, mid.y);
-          setInteractionMode();
+          touchAnchorP = clientToImagePoint(mid.x, mid.y); // 共用同一錨點策略
         }
       });
 
@@ -304,16 +309,15 @@
         if (pointers.size === 2) {
           const pts = [...pointers.values()];
           const curDist = distance(pts[0], pts[1]);
-          const mid = midpoint(pts[0], pts[1]);
-          const s1 = clamp(
-            startScale * (curDist / startDist),
-            MIN_SCALE,
-            MAX_SCALE
-          );
+          const prevDist = startDist || curDist;
+          startDist = prevDist; // 桌面筆/觸控板時用不到也不影響
+          const scaleFactor = curDist / prevDist || 1;
+          const s1 = clamp(scale * scaleFactor, MIN_SCALE, MAX_SCALE);
 
+          const mid = midpoint(pts[0], pts[1]);
           const L = imageTopLeft();
-          tx = mid.x - L.x - anchorP.x * s1;
-          ty = mid.y - L.y - anchorP.y * s1;
+          tx = mid.x - L.x - touchAnchorP.x * s1;
+          ty = mid.y - L.y - touchAnchorP.y * s1;
 
           scale = s1;
           commit(true);
@@ -327,9 +331,9 @@
 
       viewer.addEventListener("pointerup", (e) => {
         pointers.delete(e.pointerId);
-        viewer.releasePointerCapture(e.pointerId);
+        if (e.pointerType !== "touch")
+          viewer.releasePointerCapture(e.pointerId);
         if (pointers.size === 0) {
-          // ⛔️ 移除圖片上的換頁（避免和 overlay 雙重觸發）
           dragStart = null;
           setInteractionMode();
         }
@@ -341,6 +345,103 @@
         setInteractionMode();
       });
 
+      // ===== 手機：Touch Fallback（滑順多指）=====
+      const isTouchDevice = navigator.maxTouchPoints > 0;
+
+      if (isTouchDevice) {
+        viewer.addEventListener(
+          "touchstart",
+          (e) => {
+            // 兩指：建立 pinch 錨點
+            if (e.touches.length === 2) {
+              const t1 = e.touches[0],
+                t2 = e.touches[1];
+              const mid = {
+                x: (t1.clientX + t2.clientX) / 2,
+                y: (t1.clientY + t2.clientY) / 2,
+              };
+              touchAnchorP = clientToImagePoint(mid.x, mid.y);
+              touchStartDist = Math.hypot(
+                t2.clientX - t1.clientX,
+                t2.clientY - t1.clientY
+              );
+              touchStartScale = scale;
+              // 縮放期：禁用瀏覽器手勢
+              viewer.style.touchAction = "none";
+            } else if (e.touches.length === 1 && scale > 1) {
+              const t = e.touches[0];
+              touchDragStart = { x: t.clientX, y: t.clientY, tx0: tx, ty0: ty };
+              viewer.style.touchAction = "none";
+            } else {
+              viewer.style.touchAction = "pan-y pinch-zoom";
+            }
+          },
+          { passive: true }
+        );
+
+        viewer.addEventListener(
+          "touchmove",
+          (e) => {
+            // 在捏合或拖曳時阻止瀏覽器捲動
+            if (e.touches.length >= 1) e.preventDefault();
+
+            if (e.touches.length === 2) {
+              const t1 = e.touches[0],
+                t2 = e.touches[1];
+              const mid = {
+                x: (t1.clientX + t2.clientX) / 2,
+                y: (t1.clientY + t2.clientY) / 2,
+              };
+              const curDist = Math.hypot(
+                t2.clientX - t1.clientX,
+                t2.clientY - t1.clientY
+              );
+              const s1 = clamp(
+                touchStartScale * (curDist / touchStartDist),
+                MIN_SCALE,
+                MAX_SCALE
+              );
+
+              const L = imageTopLeft();
+              tx = mid.x - L.x - touchAnchorP.x * s1;
+              ty = mid.y - L.y - touchAnchorP.y * s1;
+
+              scale = s1;
+              commit(true);
+            } else if (e.touches.length === 1 && touchDragStart && scale > 1) {
+              const t = e.touches[0];
+              tx = touchDragStart.tx0 + (t.clientX - touchDragStart.x);
+              ty = touchDragStart.ty0 + (t.clientY - touchDragStart.y);
+              commit(true);
+            }
+          },
+          { passive: false }
+        ); // ⬅️ 必須 passive:false 才能 preventDefault
+
+        viewer.addEventListener(
+          "touchend",
+          (e) => {
+            if (e.touches.length === 0) {
+              touchDragStart = null;
+              viewer.style.touchAction =
+                scale > 1 ? "none" : "pan-y pinch-zoom";
+              setInteractionMode();
+            }
+          },
+          { passive: true }
+        );
+
+        viewer.addEventListener(
+          "touchcancel",
+          () => {
+            touchDragStart = null;
+            viewer.style.touchAction = scale > 1 ? "none" : "pan-y pinch-zoom";
+            setInteractionMode();
+          },
+          { passive: true }
+        );
+      }
+
       // ===== overlay：未縮放時的左右半邊換頁（含點擊閾值）=====
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
       overlay.addEventListener("pointerdown", (e) => {
@@ -348,14 +449,13 @@
       });
       overlay.addEventListener("pointerup", (e) => {
         if (scale !== 1) return;
-        // 若滑動距離太大，視為拖動而非點擊
         const dx = Math.abs(e.clientX - (overlayDownX ?? e.clientX));
         overlayDownX = null;
         if (dx > 10) return; // 閾值：10px
         handlePositionalClick(e.clientX);
       });
 
-      // ===== 滾輪：縮放／平移 =====
+      // ===== 桌面：滾輪（縮放／平移）=====
       function normalizeMagnitude(e) {
         let dx = e.deltaX,
           dy = e.deltaY;
