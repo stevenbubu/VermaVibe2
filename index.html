@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.52</title>
+    <title>Ver 0.0.53</title>
     <style>
       html,
       body {
@@ -27,10 +27,11 @@
         user-select: none;
         background: #000;
         overflow: hidden;
+        touch-action: pan-y pinch-zoom; /* 舞台也跟著切換（scale>1時改為none） */
       }
       .slide {
         max-width: 100vw;
-        max-height: 100dvh; /* 一併改成動態視窗高度 */
+        max-height: 100dvh;
         width: auto;
         height: auto;
         object-fit: contain;
@@ -89,7 +90,7 @@
       const DOUBLE_TAP_MS = 300,
         WHEEL_ZOOM_FACTOR = 1.1;
       const PAN_SPEED_BASE = 1.6,
-        EPS = 0.5; // 略降 EPS，減少提早夾住的感覺
+        EPS = 0.5;
 
       const isTouchDevice = navigator.maxTouchPoints > 0;
       const CLICK_THRESHOLD_PX = isTouchDevice ? 22 : 10;
@@ -130,7 +131,7 @@
         tapStartTime = 0;
       let lastMoveX = null,
         lastMoveY = null,
-        lastMoveTime = 0; // 記錄末次移動供速度計算
+        lastMoveTime = 0;
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -138,7 +139,7 @@
       const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
       function stageRect() {
-        return stage.getBoundingClientRect();
+        return stage.getBoundingClientRect(); // 固定在視窗，left/top 約為 0
       }
       function stageSize() {
         const vv = window.visualViewport;
@@ -148,25 +149,15 @@
         const r = stageRect();
         return { width: r.width, height: r.height };
       }
-      function stageCenter() {
-        const r = stageRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      // 舞台本地居中位置（不依賴 rect.left/top）
+      function imageTopLeftLocal() {
+        const { width: stageW, height: stageH } = stageSize();
+        return { x: (stageW - baseW) / 2, y: (stageH - baseH) / 2 };
       }
-      function fitContain(sw, sh, nw, nh) {
-        const imgRatio = nw / nh,
-          stageRatio = sw / sh;
-        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
-        return { h: sh, w: sh * imgRatio };
-      }
-      function imageTopLeft() {
-        const r = stageRect();
-        return {
-          x: r.left + (r.width - baseW) / 2,
-          y: r.top + (r.height - baseH) / 2,
-        };
-      }
+      // client -> 圖片本地座標（舞台本地）
       function clientToImagePoint(clientX, clientY) {
-        const L = imageTopLeft();
+        // 舞台是 fixed + inset:0，clientX/Y 即舞台本地
+        const L = imageTopLeftLocal();
         const ix = (clientX - L.x - tx) / scale;
         const iy = (clientY - L.y - ty) / scale;
         return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
@@ -181,38 +172,44 @@
         baseH = s.h;
         commit(true);
       }
+      function fitContain(sw, sh, nw, nh) {
+        const imgRatio = nw / nh,
+          stageRatio = sw / sh;
+        if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
+        return { h: sh, w: sh * imgRatio };
+      }
 
       // ===== 視覺更新 =====
       function commit(needsClamp = true) {
         if (needsClamp) clampTranslate();
         if (rafId) return;
         rafId = requestAnimationFrame(() => {
-          viewer.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+          viewer.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`;
           setInteractionMode();
           rafId = null;
         });
       }
 
-      // 精準邊界夾限（含 L.x/L.y）
+      // 舞台本地坐標的精準夾限（不依賴 rect.left/top）
       function clampTranslate() {
-        const r = stageRect();
-        const L = imageTopLeft();
+        const { width: stageW, height: stageH } = stageSize();
+        const L = imageTopLeftLocal(); // 居中後的本地左上角
         const contentW = baseW * scale;
         const contentH = baseH * scale;
 
         // 水平
-        if (contentW > r.width) {
-          const minTx = r.right - L.x - contentW - EPS;
-          const maxTx = r.left - L.x + EPS;
+        if (contentW > stageW) {
+          const minTx = stageW - L.x - contentW - EPS; // 右貼齊
+          const maxTx = -L.x + EPS; // 左貼齊
           tx = clamp(tx, minTx, maxTx);
         } else {
           tx = 0;
         }
 
         // 垂直
-        if (contentH > r.height) {
-          const minTy = r.bottom - L.y - contentH - EPS;
-          const maxTy = r.top - L.y + EPS;
+        if (contentH > stageH) {
+          const minTy = stageH - L.y - contentH - EPS; // 底貼齊
+          const maxTy = -L.y + EPS; // 頂貼齊
           ty = clamp(ty, minTy, maxTy);
         } else {
           ty = 0;
@@ -263,15 +260,15 @@
       // 左右半邊換頁（僅 scale===1 時）
       function handlePositionalClick(clientX) {
         if (scale !== 1) return;
-        const r = stageRect();
-        const leftHalf = clientX - r.left < r.width / 2;
+        const { width: stageW } = stageSize();
+        const leftHalf = clientX < stageW / 2;
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // 以圖片座標為中心縮放
+      // 以圖片座標為中心縮放（舞台本地）
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
-        const L = imageTopLeft();
+        const L = imageTopLeftLocal();
         const p = clientToImagePoint(clientX, clientY);
         tx = clientX - L.x - p.x * s1;
         ty = clientY - L.y - p.y * s1;
@@ -290,10 +287,8 @@
 
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
-          // 雙擊：未縮放 -> 交給 stage 處理為兩次單擊；已縮放 -> 還原
-          if (scale > 1) {
-            zoomAtImagePoint(1, e.clientX, e.clientY);
-          }
+          // 雙擊：未縮放 -> 交給 stage 的兩次單擊；已縮放 -> 還原
+          if (scale > 1) zoomAtImagePoint(1, e.clientX, e.clientY);
           lastTap = 0;
           return;
         }
@@ -332,7 +327,7 @@
           );
 
           const mid = midpoint(pts[0], pts[1]);
-          const L = imageTopLeft();
+          const L = imageTopLeftLocal();
           tx = mid.x - L.x - touchAnchorP.x * s1;
           ty = mid.y - L.y - touchAnchorP.y * s1;
 
@@ -366,7 +361,6 @@
 
       // ===== Stage：Tap + Swipe（只在 scale===1 啟用換頁）=====
       stage.addEventListener("pointerdown", (e) => {
-        // 只看主鍵（滑鼠）；觸控 buttons=0 也會進入
         if (e.buttons && e.buttons !== 1) return;
         tapStartX = e.clientX;
         tapStartY = e.clientY;
@@ -377,7 +371,6 @@
       });
 
       stage.addEventListener("pointermove", (e) => {
-        // 記錄最後移動點與時間，用於判斷滑動速度
         lastMoveX = e.clientX;
         lastMoveY = e.clientY;
         lastMoveTime = performance.now();
@@ -398,7 +391,6 @@
         const mvDx = endX - (lastMoveX ?? endX);
         const velocityX = Math.abs(mvDx) / mvDt; // px/ms
 
-        // Swipe（優先）：距離足 + 速度足，且水平量遠大於垂直量
         const absDx = Math.abs(dx),
           absDy = Math.abs(dy);
         const isSwipe =
@@ -409,7 +401,6 @@
         if (isSwipe) {
           show(dx < 0 ? idx + 1 : idx - 1); // 左滑下一張、右滑上一張
         } else {
-          // Tap：雙閾值 + 時間條件
           if (
             absDx <= CLICK_THRESHOLD_PX &&
             absDy <= CLICK_THRESHOLD_PY &&
@@ -420,6 +411,13 @@
         }
 
         // 清空
+        tapStartX = tapStartY = null;
+        tapStartTime = 0;
+        lastMoveX = lastMoveY = null;
+        lastMoveTime = 0;
+      });
+
+      stage.addEventListener("pointercancel", () => {
         tapStartX = tapStartY = null;
         tapStartTime = 0;
         lastMoveX = lastMoveY = null;
@@ -496,35 +494,39 @@
           resetTransform();
         } else if (key === "+" || key === "=") {
           e.preventDefault();
-          const c = stageCenter();
+          const { width: stageW, height: stageH } = stageSize();
+          const cX = stageW / 2,
+            cY = stageH / 2;
           zoomAtImagePoint(
             clamp(scale * WHEEL_ZOOM_FACTOR, MIN_SCALE, MAX_SCALE),
-            c.x,
-            c.y
+            cX,
+            cY
           );
         } else if (key === "-" || key === "_") {
           e.preventDefault();
-          const c = stageCenter();
+          const { width: stageW, height: stageH } = stageSize();
+          const cX = stageW / 2,
+            cY = stageH / 2;
           zoomAtImagePoint(
             clamp(scale / WHEEL_ZOOM_FACTOR, MIN_SCALE, MAX_SCALE),
-            c.x,
-            c.y
+            cX,
+            cY
           );
         }
       });
 
       // ===== 舞台尺寸變更 =====
-      window.addEventListener("resize", () => {
+      function recomputeOnViewportChange() {
         recomputeBaseSize();
-      });
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener("resize", () => {
-          recomputeBaseSize();
-        });
       }
-      window.addEventListener("orientationchange", () => {
-        recomputeBaseSize();
-      });
+      window.addEventListener("resize", recomputeOnViewportChange);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener(
+          "resize",
+          recomputeOnViewportChange
+        );
+      }
+      window.addEventListener("orientationchange", recomputeOnViewportChange);
 
       // ===== 初始化 =====
       show(0);
