@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.51</title>
+    <title>Ver 0.0.52</title>
     <style>
       html,
       body {
@@ -72,7 +72,7 @@
     </div>
 
     <div class="hint" id="hint">
-      ← → 鍵切換｜手機可滑動或左右輕點｜雙指可縮放
+      ← → 鍵切換｜手機單擊或滑動可切換｜雙指可縮放
     </div>
 
     <script>
@@ -89,12 +89,16 @@
       const DOUBLE_TAP_MS = 300,
         WHEEL_ZOOM_FACTOR = 1.1;
       const PAN_SPEED_BASE = 1.6,
-        EPS = 0.75;
+        EPS = 0.5; // 略降 EPS，減少提早夾住的感覺
 
       const isTouchDevice = navigator.maxTouchPoints > 0;
-      const CLICK_THRESHOLD_PX = isTouchDevice ? 20 : 10;
-      const CLICK_THRESHOLD_PY = isTouchDevice ? 20 : 10;
+      const CLICK_THRESHOLD_PX = isTouchDevice ? 22 : 10;
+      const CLICK_THRESHOLD_PY = isTouchDevice ? 22 : 10;
       const TAP_DURATION_MS = 250;
+
+      // Swipe 閾值（距離 + 速度）
+      const SWIPE_MIN_PX = isTouchDevice ? 48 : 36;
+      const SWIPE_MIN_VELOCITY = 0.35; // px/ms
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
@@ -120,9 +124,13 @@
       let baseW = 0,
         baseH = 0;
 
+      // Tap / Swipe（掛在 stage）
       let tapStartX = null,
         tapStartY = null,
         tapStartTime = 0;
+      let lastMoveX = null,
+        lastMoveY = null,
+        lastMoveTime = 0; // 記錄末次移動供速度計算
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -141,7 +149,6 @@
         return { width: r.width, height: r.height };
       }
       function stageCenter() {
-        // 以實際舞台的 rect 計算中心（含 left/top）
         const r = stageRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
@@ -151,7 +158,6 @@
         if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
         return { h: sh, w: sh * imgRatio };
       }
-      // 圖片未變形時的「舞台左上角座標」（flex 置中 + contain）
       function imageTopLeft() {
         const r = stageRect();
         return {
@@ -159,7 +165,6 @@
           y: r.top + (r.height - baseH) / 2,
         };
       }
-      // client -> 圖片本地座標（未縮放）
       function clientToImagePoint(clientX, clientY) {
         const L = imageTopLeft();
         const ix = (clientX - L.x - tx) / scale;
@@ -167,7 +172,7 @@
         return { x: clamp(ix, 0, baseW), y: clamp(iy, 0, baseH) };
       }
       function recomputeBaseSize() {
-        const { width: sw, height: sh } = stageSize(); // 優先使用 visualViewport 尺寸
+        const { width: sw, height: sh } = stageSize();
         const nw = viewer.naturalWidth || viewer.width || viewer.offsetWidth;
         const nh = viewer.naturalHeight || viewer.height || viewer.offsetHeight;
         if (!nw || !nh || !sw || !sh) return;
@@ -188,11 +193,7 @@
         });
       }
 
-      /**
-       * 精準邊界夾限（含 L.x/L.y）：
-       * - 以舞台的 rect 與未縮放時居中的左上角 L.x/L.y 作為基準
-       * - 當內容（baseW/baseH * scale）大於舞台時，允許在不露黑邊的範圍內平移
-       */
+      // 精準邊界夾限（含 L.x/L.y）
       function clampTranslate() {
         const r = stageRect();
         const L = imageTopLeft();
@@ -201,17 +202,17 @@
 
         // 水平
         if (contentW > r.width) {
-          const minTx = r.right - L.x - contentW - EPS; // 右貼齊
-          const maxTx = r.left - L.x + EPS; // 左貼齊
+          const minTx = r.right - L.x - contentW - EPS;
+          const maxTx = r.left - L.x + EPS;
           tx = clamp(tx, minTx, maxTx);
         } else {
-          tx = 0; // 內容未超出舞台：保持居中
+          tx = 0;
         }
 
         // 垂直
         if (contentH > r.height) {
-          const minTy = r.bottom - L.y - contentH - EPS; // 底貼齊
-          const maxTy = r.top - L.y + EPS; // 頂貼齊
+          const minTy = r.bottom - L.y - contentH - EPS;
+          const maxTy = r.top - L.y + EPS;
           ty = clamp(ty, minTy, maxTy);
         } else {
           ty = 0;
@@ -222,10 +223,10 @@
       function setInteractionMode() {
         if (scale === 1) {
           viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生
-          viewer.style.pointerEvents = "auto";
+          stage.style.touchAction = "pan-y pinch-zoom";
         } else {
           viewer.style.touchAction = "none"; // 縮放中：自訂手勢
-          viewer.style.pointerEvents = "auto";
+          stage.style.touchAction = "none";
         }
       }
 
@@ -278,7 +279,7 @@
         commit(true);
       }
 
-      // ===== Pointer（滑鼠/筆/觸控板）=====
+      // ===== Viewer：Pointer（滑鼠/筆/觸控板）——只負責縮放/拖曳 =====
       viewer.addEventListener("pointerdown", (e) => {
         pointers.set(e.pointerId, {
           x: e.clientX,
@@ -289,8 +290,10 @@
 
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
-          // 雙擊：未縮放 -> 放大；已縮放 -> 還原
-          zoomAtImagePoint(scale > 1 ? 1 : 2, e.clientX, e.clientY);
+          // 雙擊：未縮放 -> 交給 stage 處理為兩次單擊；已縮放 -> 還原
+          if (scale > 1) {
+            zoomAtImagePoint(1, e.clientX, e.clientY);
+          }
           lastTap = 0;
           return;
         }
@@ -361,97 +364,69 @@
         setInteractionMode();
       });
 
-      // ===== Touch Fallback（行動裝置多指更滑順）=====
-      if (isTouchDevice) {
-        viewer.addEventListener(
-          "touchstart",
-          (e) => {
-            if (e.touches.length === 2) {
-              const t1 = e.touches[0],
-                t2 = e.touches[1];
-              const mid = {
-                x: (t1.clientX + t2.clientX) / 2,
-                y: (t1.clientY + t2.clientY) / 2,
-              };
-              touchAnchorP = clientToImagePoint(mid.x, mid.y);
-              touchStartDist = Math.hypot(
-                t2.clientX - t1.clientX,
-                t2.clientY - t1.clientY
-              );
-              touchStartScale = scale;
-              viewer.style.touchAction = "none";
-            } else if (e.touches.length === 1 && scale > 1) {
-              const t = e.touches[0];
-              touchDragStart = { x: t.clientX, y: t.clientY, tx0: tx, ty0: ty };
-              viewer.style.touchAction = "none";
-            } else {
-              viewer.style.touchAction = "pan-y pinch-zoom";
-            }
-          },
-          { passive: true }
-        );
+      // ===== Stage：Tap + Swipe（只在 scale===1 啟用換頁）=====
+      stage.addEventListener("pointerdown", (e) => {
+        // 只看主鍵（滑鼠）；觸控 buttons=0 也會進入
+        if (e.buttons && e.buttons !== 1) return;
+        tapStartX = e.clientX;
+        tapStartY = e.clientY;
+        tapStartTime = performance.now();
+        lastMoveX = tapStartX;
+        lastMoveY = tapStartY;
+        lastMoveTime = tapStartTime;
+      });
 
-        viewer.addEventListener(
-          "touchmove",
-          (e) => {
-            if (e.touches.length >= 1) e.preventDefault();
+      stage.addEventListener("pointermove", (e) => {
+        // 記錄最後移動點與時間，用於判斷滑動速度
+        lastMoveX = e.clientX;
+        lastMoveY = e.clientY;
+        lastMoveTime = performance.now();
+      });
 
-            if (e.touches.length === 2) {
-              const t1 = e.touches[0],
-                t2 = e.touches[1];
-              const mid = {
-                x: (t1.clientX + t2.clientX) / 2,
-                y: (t1.clientY + t2.clientY) / 2,
-              };
-              const curDist = Math.hypot(
-                t2.clientX - t1.clientX,
-                t2.clientY - t1.clientY
-              );
-              const s1 = clamp(
-                touchStartScale * (curDist / touchStartDist),
-                MIN_SCALE,
-                MAX_SCALE
-              );
+      stage.addEventListener("pointerup", (e) => {
+        if (scale !== 1) return; // 縮放中不做換頁
+        const endX = e.clientX,
+          endY = e.clientY;
+        const endTime = performance.now();
 
-              const L = imageTopLeft();
-              tx = mid.x - L.x - touchAnchorP.x * s1;
-              ty = mid.y - L.y - touchAnchorP.y * s1;
+        const dx = endX - (tapStartX ?? endX);
+        const dy = endY - (tapStartY ?? endY);
+        const dt = endTime - (tapStartTime || endTime);
 
-              scale = s1;
-              commit(true);
-            } else if (e.touches.length === 1 && touchDragStart && scale > 1) {
-              const t = e.touches[0];
-              tx = touchDragStart.tx0 + (t.clientX - touchDragStart.x);
-              ty = touchDragStart.ty0 + (t.clientY - touchDragStart.y);
-              commit(true);
-            }
-          },
-          { passive: false }
-        );
+        // 計算水平滑動速度（最後一段移動）
+        const mvDt = Math.max(1, endTime - (lastMoveTime || endTime));
+        const mvDx = endX - (lastMoveX ?? endX);
+        const velocityX = Math.abs(mvDx) / mvDt; // px/ms
 
-        viewer.addEventListener(
-          "touchend",
-          (e) => {
-            if (e.touches.length === 0) {
-              touchDragStart = null;
-              viewer.style.touchAction =
-                scale > 1 ? "none" : "pan-y pinch-zoom";
-              setInteractionMode();
-            }
-          },
-          { passive: true }
-        );
+        // Swipe（優先）：距離足 + 速度足，且水平量遠大於垂直量
+        const absDx = Math.abs(dx),
+          absDy = Math.abs(dy);
+        const isSwipe =
+          absDx > SWIPE_MIN_PX &&
+          absDx > absDy * 1.5 &&
+          velocityX >= SWIPE_MIN_VELOCITY;
 
-        viewer.addEventListener(
-          "touchcancel",
-          () => {
-            touchDragStart = null;
-            viewer.style.touchAction = scale > 1 ? "none" : "pan-y pinch-zoom";
-            setInteractionMode();
-          },
-          { passive: true }
-        );
-      }
+        if (isSwipe) {
+          show(dx < 0 ? idx + 1 : idx - 1); // 左滑下一張、右滑上一張
+        } else {
+          // Tap：雙閾值 + 時間條件
+          if (
+            absDx <= CLICK_THRESHOLD_PX &&
+            absDy <= CLICK_THRESHOLD_PY &&
+            dt <= TAP_DURATION_MS
+          ) {
+            handlePositionalClick(endX);
+          }
+        }
+
+        // 清空
+        tapStartX = tapStartY = null;
+        tapStartTime = 0;
+        lastMoveX = lastMoveY = null;
+        lastMoveTime = 0;
+      });
+
+      stage.addEventListener("contextmenu", (e) => e.preventDefault());
 
       // ===== 滾輪（縮放／平移）=====
       function normalizeMagnitude(e) {
@@ -538,38 +513,11 @@
         }
       });
 
-      // ===== Tap（左右半邊切換，掛在 stage）=====
-      stage.addEventListener("pointerdown", (e) => {
-        if (e.buttons && e.buttons !== 1) return; // 只看主鍵
-        tapStartX = e.clientX;
-        tapStartY = e.clientY;
-        tapStartTime = performance.now();
-      });
-      stage.addEventListener("pointerup", (e) => {
-        if (scale !== 1) return;
-        const dx = Math.abs(e.clientX - (tapStartX ?? e.clientX));
-        const dy = Math.abs(e.clientY - (tapStartY ?? e.clientY));
-        const dt = performance.now() - (tapStartTime || performance.now());
-        tapStartX = tapStartY = null;
-        tapStartTime = 0;
-
-        // 雙閾值 + 時間條件（手機更可靠）
-        if (
-          dx <= CLICK_THRESHOLD_PX &&
-          dy <= CLICK_THRESHOLD_PY &&
-          dt <= TAP_DURATION_MS
-        ) {
-          handlePositionalClick(e.clientX);
-        }
-      });
-      stage.addEventListener("contextmenu", (e) => e.preventDefault());
-
       // ===== 舞台尺寸變更 =====
       window.addEventListener("resize", () => {
         recomputeBaseSize();
       });
       if (window.visualViewport) {
-        // 在工具列顯示/隱藏或鍵盤彈出時能即時重算
         window.visualViewport.addEventListener("resize", () => {
           recomputeBaseSize();
         });
