@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.37</title>
+    <title>Ver 0.0.38</title>
     <style>
       html,
       body {
@@ -18,9 +18,10 @@
         background: transparent;
         /* 未縮放時允許垂直捲動 + 原生 pinch-zoom；縮放中改由 JS 控制 */
         touch-action: pan-y pinch-zoom;
+        z-index: 1; /* ⬅️ overlay 在下層 */
       }
       .stage {
-        position: relative;
+        position: fixed;
         inset: 0;
         display: flex;
         align-items: center;
@@ -39,6 +40,9 @@
 
         will-change: transform;
         transform-origin: 0 0; /* 以左上角為原點，便於 translate + scale */
+
+        position: relative; /* ⬅️ 使 z-index 生效 */
+        z-index: 2; /* ⬅️ 圖片在 overlay 上方，手勢不會被擋 */
       }
       .hint {
         position: fixed;
@@ -94,7 +98,7 @@
       let tx = 0,
         ty = 0;
 
-      // 依舞台與圖片比例計算「顯示尺寸（contain fit）」；避免用 offsetWidth 近似
+      // 依舞台與圖片比例計算「顯示尺寸（contain fit）」
       function getDisplayedSize() {
         const stageRect = stage.getBoundingClientRect();
         const sw = stageRect.width,
@@ -102,18 +106,15 @@
         const nw = viewer.naturalWidth || viewer.width;
         const nh = viewer.naturalHeight || viewer.height;
         if (!nw || !nh || !sw || !sh) {
-          // fallback：仍可運作，但精度較低
-          return { w: viewer.offsetWidth, h: viewer.offsetHeight };
+          return { w: viewer.offsetWidth, h: viewer.offsetHeight }; // fallback
         }
         const imgRatio = nw / nh;
         const stageRatio = sw / sh;
         let w, h;
         if (imgRatio > stageRatio) {
-          // 以寬為主
           w = sw;
           h = sw / imgRatio;
         } else {
-          // 以高為主
           h = sh;
           w = sh * imgRatio;
         }
@@ -135,7 +136,6 @@
         const stageW = stageRect.width;
         const stageH = stageRect.height;
 
-        // 以舞台中心對齊；能拖到四邊
         const maxOffsetX = Math.max(0, (contentW - stageW) / 2);
         const maxOffsetY = Math.max(0, (contentH - stageH) / 2);
 
@@ -179,12 +179,11 @@
           hint.textContent = `載入失敗：${url}（點擊可跳下一張）`;
           hint.classList.remove("hidden");
         };
-        // 預載下一張
         const pre = new Image();
         pre.src = images[(idx + 1) % images.length];
       }
 
-      // 👉 左右半邊切換（只在縮放＝1 時生效）
+      // 👉 左右半邊切換（在縮放＝1 時生效）
       function handlePositionalClick(clientX) {
         const { left, width } = stage.getBoundingClientRect();
         const x = clientX - left;
@@ -193,7 +192,6 @@
         else show(idx + 1);
       }
 
-      // 取消右鍵選單
       overlay.addEventListener("contextmenu", (e) => e.preventDefault());
 
       // ====== 在 viewer 上處理縮放／拖曳／雙擊 ======
@@ -222,13 +220,11 @@
         return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       }
 
-      // 以某一點為中心縮放（支援雙擊與滾輪）
       function zoomAtPoint(targetScale, clientX, clientY) {
         const prevScale = scale;
         targetScale = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const center = stageCenter();
 
-        // 以游標/觸點相對舞台中心為基準，補償平移
         tx += (clientX - center.x) * (1 - targetScale / prevScale);
         ty += (clientY - center.y) * (1 - targetScale / prevScale);
 
@@ -258,7 +254,7 @@
         lastTap = now;
 
         if (activePointers.size === 1) {
-          // 未縮放：讓 overlay 處理左右半邊點擊；縮放中：單指拖曳
+          // 未縮放：讓 overlay/或 viewer 的點擊判斷來換頁；縮放中：單指拖曳
           if (scale > 1)
             dragStart = { x: e.clientX, y: e.clientY, tx0: tx, ty0: ty };
         } else if (activePointers.size === 2) {
@@ -270,8 +266,7 @@
           startMid = midpoint(p1, p2);
           startTx = tx;
           startTy = ty;
-          // 進入縮放模式：關閉 overlay 事件
-          setInteractionMode();
+          setInteractionMode(); // 進入縮放模式：關閉 overlay 事件
         }
       });
 
@@ -327,8 +322,11 @@
           startDist = 0;
         }
         if (activePointers.size === 0) {
+          // ⬅️ 在縮放＝1 且沒有拖曳時，點在圖片上也可左右半邊換頁
+          if (scale === 1 && !dragStart) {
+            handlePositionalClick(e.clientX);
+          }
           dragStart = null;
-          // 未縮放時：交還 overlay 來處理左右半邊點擊
           setInteractionMode();
         }
       });
@@ -341,16 +339,30 @@
         setInteractionMode();
       });
 
-      // 桌面：滑鼠滾輪縮放（以游標為中心）
+      // 桌面：滾輪平移（縮放中）；Ctrl+滾輪縮放
       stage.addEventListener(
         "wheel",
         (e) => {
-          if (e.ctrlKey) return; // 交給瀏覽器的整頁縮放
-          e.preventDefault();
-          const delta = Math.sign(e.deltaY);
-          const factor = delta > 0 ? 1 / 1.1 : 1.1;
-          const targetScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE);
-          zoomAtPoint(targetScale, e.clientX, e.clientY);
+          if (e.ctrlKey) {
+            // ⌃ + 滾輪：縮放圖片（避免瀏覽器整頁縮放）
+            e.preventDefault();
+            const delta = Math.sign(e.deltaY);
+            const factor = delta > 0 ? 1 / 1.1 : 1.1;
+            const targetScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE);
+            zoomAtPoint(targetScale, e.clientX, e.clientY);
+            return;
+          }
+          if (scale > 1) {
+            // 縮放中：滾輪用來平移（下拉到最底）
+            e.preventDefault();
+            const PAN_SPEED = 1; // 可依習慣調整
+            tx -= e.deltaX * PAN_SPEED;
+            ty -= e.deltaY * PAN_SPEED;
+            clampTranslate();
+            applyTransform();
+            return;
+          }
+          // scale === 1：不攔截，保留頁面預設捲動（但舞台是 fixed，頁面本身通常無高度可捲）
         },
         { passive: false }
       );
@@ -403,3 +415,4 @@
     </script>
   </body>
 </html>
+``
