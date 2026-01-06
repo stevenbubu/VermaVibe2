@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ver 0.0.48</title>
+    <title>Ver 0.0.49</title>
     <style>
       html,
       body {
@@ -33,8 +33,7 @@
         transform-origin: 0 0;
         position: relative;
         z-index: 1;
-        /* 初始：允許捏合與垂直捲動；縮放時由 JS 改為 none */
-        touch-action: pan-y pinch-zoom;
+        touch-action: pan-y pinch-zoom; /* 未縮放允許原生，縮放時會改為 none */
         backface-visibility: hidden;
         translate: 0 0;
       }
@@ -84,7 +83,12 @@
         WHEEL_ZOOM_FACTOR = 1.1;
       const PAN_SPEED_BASE = 1.6,
         EPS = 0.75;
-      const CLICK_THRESHOLD_PX = 10;
+
+      // Tap 閾值（手機較寬鬆）
+      const isTouchDevice = navigator.maxTouchPoints > 0;
+      const CLICK_THRESHOLD_PX = isTouchDevice ? 20 : 10;
+      const CLICK_THRESHOLD_PY = isTouchDevice ? 20 : 10;
+      const TAP_DURATION_MS = 250;
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
@@ -99,28 +103,30 @@
       let rafId = null,
         lastTap = 0;
 
-      // Pointer 狀態（滑鼠/筆/觸控的通用）
+      // Pointer 狀態（桌面/觸控板/筆）
       const pointers = new Map();
       let dragStart = null;
 
       // Touch Fallback（行動裝置）
-      const isTouchDevice = navigator.maxTouchPoints > 0;
       let touchDragStart = null; // 單指拖曳
       let touchStartDist = 0; // pinch 起始距離
       let touchStartScale = 1; // pinch 起始縮放
       let touchAnchorP = { x: 0, y: 0 }; // pinch 錨點（圖片座標）
 
-      // 未縮放時 contain 尺寸快取（畫面中的 w/h）
+      // contain 尺寸快取
       let baseW = 0,
         baseH = 0;
 
-      // 點擊閾值判斷（避免滑動誤觸）
-      let downX = null;
+      // tap 檢測（掛在 stage）
+      let tapStartX = null,
+        tapStartY = null,
+        tapStartTime = 0;
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: a.y + b.y });
+      // ✅ 修正 y 的 /2
+      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
       function stageRect() {
         return stage.getBoundingClientRect();
@@ -135,7 +141,6 @@
         if (imgRatio > stageRatio) return { w: sw, h: sw / imgRatio };
         return { h: sh, w: sh * imgRatio };
       }
-      // 圖片未變形時的「畫面左上角」（flex 置中 + contain）
       function imageTopLeft() {
         const r = stageRect();
         return {
@@ -143,7 +148,6 @@
           y: r.top + (r.height - baseH) / 2,
         };
       }
-      // client -> 圖片本地座標（未縮放）
       function clientToImagePoint(clientX, clientY) {
         const L = imageTopLeft();
         const ix = (clientX - L.x - tx) / scale;
@@ -172,7 +176,7 @@
         });
       }
 
-      // 非對稱邊界（不露黑邊）+ 內容小於舞台時置中
+      // 非對稱邊界 + 內容小於舞台時置中
       function clampTranslate() {
         const r = stageRect();
         const L = imageTopLeft();
@@ -186,7 +190,6 @@
         } else {
           tx = 0;
         }
-
         if (contentH > r.height) {
           const minTy = r.bottom - L.y - contentH - EPS;
           const maxTy = r.top - L.y + EPS;
@@ -196,13 +199,12 @@
         }
       }
 
-      // 切換互動模式：縮放中禁用原生手勢，未縮放允許
       function setInteractionMode() {
         if (scale === 1) {
-          viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生捲動/捏合
+          viewer.style.touchAction = "pan-y pinch-zoom"; // 未縮放：允許原生
           viewer.style.pointerEvents = "auto";
         } else {
-          viewer.style.touchAction = "none"; // 縮放中：交給自訂手勢
+          viewer.style.touchAction = "none"; // 縮放中：自訂手勢
           viewer.style.pointerEvents = "auto";
         }
       }
@@ -245,7 +247,7 @@
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
-      // 以「圖片座標」為中心縮放
+      // 以圖片座標為中心縮放
       function zoomAtImagePoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const L = imageTopLeft();
@@ -258,14 +260,11 @@
 
       // ===== 桌面：Pointer（滑鼠/筆）=====
       viewer.addEventListener("pointerdown", (e) => {
-        downX = e.clientX;
-
         pointers.set(e.pointerId, {
           x: e.clientX,
           y: e.clientY,
           type: e.pointerType,
         });
-        // 只對非觸控指標使用 pointer capture（避免 iOS 多指卡頓）
         if (e.pointerType !== "touch") viewer.setPointerCapture(e.pointerId);
 
         const now = Date.now();
@@ -284,7 +283,7 @@
         } else if (pointers.size === 2) {
           const pts = [...pointers.values()];
           const mid = midpoint(pts[0], pts[1]);
-          touchAnchorP = clientToImagePoint(mid.x, mid.y); // 共用錨點策略
+          touchAnchorP = clientToImagePoint(mid.x, mid.y);
         }
       });
 
@@ -298,10 +297,10 @@
 
         if (pointers.size === 2) {
           const pts = [...pointers.values()];
-          // 桌面多指：以距離比例縮放
           const curDist = distance(pts[0], pts[1]);
           const prevDist = viewer._prevDist ?? curDist;
           viewer._prevDist = curDist;
+
           const s1 = clamp(
             scale * (curDist / prevDist || 1),
             MIN_SCALE,
@@ -324,15 +323,7 @@
       });
 
       viewer.addEventListener("pointerup", (e) => {
-        const startX = downX ?? e.clientX;
-        const dx = Math.abs(e.clientX - startX);
-        downX = null;
-
-        // 點擊（非縮放）觸發半邊換頁
-        if (dx <= CLICK_THRESHOLD_PX && scale === 1) {
-          handlePositionalClick(e.clientX);
-        }
-
+        // 不在這裡觸發換頁，避免與 stage 的 tap 判斷衝突
         pointers.delete(e.pointerId);
         if (e.pointerType !== "touch")
           viewer.releasePointerCapture(e.pointerId);
@@ -343,14 +334,14 @@
         }
       });
 
-      viewer.addEventListener("pointercancel", (e) => {
-        pointers.delete(e.pointerId);
+      viewer.addEventListener("pointercancel", () => {
+        pointers.clear();
         dragStart = null;
         viewer._prevDist = undefined;
         setInteractionMode();
       });
 
-      // ===== 手機：Touch Fallback（滑順多指）=====
+      // ===== 手機：Touch Fallback（多指更滑順）=====
       if (isTouchDevice) {
         viewer.addEventListener(
           "touchstart",
@@ -368,7 +359,7 @@
                 t2.clientY - t1.clientY
               );
               touchStartScale = scale;
-              viewer.style.touchAction = "none"; // 縮放期：禁用瀏覽器手勢
+              viewer.style.touchAction = "none";
             } else if (e.touches.length === 1 && scale > 1) {
               const t = e.touches[0];
               touchDragStart = { x: t.clientX, y: t.clientY, tx0: tx, ty0: ty };
@@ -383,7 +374,7 @@
         viewer.addEventListener(
           "touchmove",
           (e) => {
-            if (e.touches.length >= 1) e.preventDefault(); // 避免捲動
+            if (e.touches.length >= 1) e.preventDefault();
 
             if (e.touches.length === 2) {
               const t1 = e.touches[0],
@@ -416,7 +407,7 @@
             }
           },
           { passive: false }
-        ); // 必須 passive:false 才能 preventDefault
+        );
 
         viewer.addEventListener(
           "touchend",
@@ -527,16 +518,31 @@
         }
       });
 
-      // ===== 點擊（左右半）改掛在 stage（也可掛 viewer）=====
+      // ===== Tap（左右半邊切換，掛在 stage）=====
       stage.addEventListener("pointerdown", (e) => {
-        downX = e.clientX;
+        if (e.buttons && e.buttons !== 1) return; // 只看主鍵
+        tapStartX = e.clientX;
+        tapStartY = e.clientY;
+        tapStartTime = performance.now();
       });
       stage.addEventListener("pointerup", (e) => {
-        const startX = downX ?? e.clientX;
-        const dx = Math.abs(e.clientX - startX);
-        downX = null;
-        if (dx > CLICK_THRESHOLD_PX) return;
-        handlePositionalClick(e.clientX);
+        // 僅在未縮放狀態判斷 tap
+        if (scale !== 1) return;
+
+        const dx = Math.abs(e.clientX - (tapStartX ?? e.clientX));
+        const dy = Math.abs(e.clientY - (tapStartY ?? e.clientY));
+        const dt = performance.now() - (tapStartTime || performance.now());
+        tapStartX = tapStartY = null;
+        tapStartTime = 0;
+
+        // 雙閾值 + 時間條件（手機更可靠）
+        if (
+          dx <= CLICK_THRESHOLD_PX &&
+          dy <= CLICK_THRESHOLD_PY &&
+          dt <= TAP_DURATION_MS
+        ) {
+          handlePositionalClick(e.clientX);
+        }
       });
       stage.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -554,4 +560,3 @@
     </script>
   </body>
 </html>
-``
