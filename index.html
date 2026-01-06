@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.56</title>
+    <title>Ver 0.0.57</title>
     <style>
       html,
       body {
@@ -58,7 +58,7 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .hint {
-          transition: none !important;
+          transition: none !重要;
         }
       }
     </style>
@@ -91,7 +91,7 @@
       const isTouchDevice = navigator.maxTouchPoints > 0;
 
       // 縮放錨點 & 滾輪平移開關
-      const ZOOM_ANCHOR = "center"; // 'center' | 'pointer'（預設 center，不跟游標）
+      const ZOOM_ANCHOR = "center"; // 'center' | 'pointer'
       const ENABLE_WHEEL_PAN = false; // 預設關閉滾輪平移
 
       // Tap 閾值（手機較寬鬆）
@@ -138,6 +138,19 @@
       let lastMoveX = null,
         lastMoveY = null,
         lastMoveTime = 0;
+
+      // ===== 防跳動：互動期間延後重算 =====
+      let recomputeTimer = null; // ⬅️ debounce 計時器
+      function isInteracting() {
+        // ⬅️ 目前是否在手勢/拖曳中
+        return pointers.size > 0 || !!stageDragStart || scale > 1;
+      }
+      function scheduleRecompute(delay = 160) {
+        // ⬅️ 互動靜止後再重算
+        clearTimeout(recomputeTimer);
+        if (isInteracting()) return; // 手勢中不重算
+        recomputeTimer = setTimeout(() => recomputeBaseSize(), delay);
+      }
 
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -235,6 +248,7 @@
         tx = 0;
         ty = 0;
         commit();
+        scheduleRecompute(); // ⬅️ 還原後允許重算
       }
 
       // ===== 顯示圖片 =====
@@ -243,13 +257,14 @@
         const url = images[idx];
 
         hint.classList.toggle("hidden", idx !== 0);
-        resetTransform();
-
+        scale = 1;
+        tx = 0;
+        ty = 0; // 重置但不立即夾限
         viewer.src = url;
         viewer.alt = `slide ${idx + 1}`;
         viewer.onload = () => {
           recomputeBaseSize();
-        };
+        }; // ⬅️ 載入完成立刻重算（安全）
         viewer.onerror = () => {
           hint.textContent = `載入失敗：${url}（點擊可跳下一張）`;
           hint.classList.remove("hidden");
@@ -293,7 +308,6 @@
           y: e.clientY,
           type: e.pointerType,
         });
-        // 縮放中：touch 也 capture，拖曳更穩
         if (scale > 1) {
           try {
             viewer.setPointerCapture(e.pointerId);
@@ -306,7 +320,6 @@
 
         const now = Date.now();
         if (now - lastTap < DOUBLE_TAP_MS) {
-          // 雙擊：未縮放 -> 中心放大；已縮放 -> 中心還原
           zoomAtCenter(scale > 1 ? 1 : 2);
           lastTap = 0;
           return;
@@ -364,6 +377,7 @@
         if (pointers.size === 0) {
           dragStart = null;
           setInteractionMode();
+          scheduleRecompute(); // ⬅️ 手勢結束後允許重算
         }
       });
 
@@ -371,6 +385,7 @@
         pointers.clear();
         dragStart = null;
         setInteractionMode();
+        scheduleRecompute(); // ⬅️
       });
 
       // ===== Stage：Tap + Swipe（scale===1），Drag（scale>1）=====
@@ -411,6 +426,7 @@
           try {
             stage.releasePointerCapture(e.pointerId);
           } catch {}
+          scheduleRecompute(); // ⬅️
           return;
         }
 
@@ -457,6 +473,7 @@
         tapStartTime = 0;
         lastMoveX = lastMoveY = null;
         lastMoveTime = 0;
+        scheduleRecompute(); // ⬅️
       });
 
       stage.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -495,6 +512,7 @@
             if (e.touches.length === 0) {
               stageDragStart = null;
               setInteractionMode();
+              scheduleRecompute(); // ⬅️
             }
           },
           { passive: true }
@@ -505,6 +523,7 @@
           () => {
             stageDragStart = null;
             setInteractionMode();
+            scheduleRecompute(); // ⬅️
           },
           { passive: true }
         );
@@ -552,8 +571,7 @@
           commit(true);
         }
       };
-      // 只監聽 stage，避免重複
-      stage.addEventListener("wheel", onWheel, { passive: false });
+      stage.addEventListener("wheel", onWheel, { passive: false }); // 只監聽 stage
 
       // ===== 鍵盤 =====
       document.addEventListener("keydown", (e) => {
@@ -585,18 +603,16 @@
         }
       });
 
-      // ===== 舞台尺寸變更 =====
-      function recomputeOnViewportChange() {
-        recomputeBaseSize();
+      // ===== 舞台尺寸變更（改為排程） =====
+      function onViewportChange() {
+        // 若瀏覽器工具列/視窗動態變更，避免打斷手勢造成亂跳
+        scheduleRecompute(); // ⬅️
       }
-      window.addEventListener("resize", recomputeOnViewportChange);
+      window.addEventListener("resize", onViewportChange);
       if (window.visualViewport) {
-        window.visualViewport.addEventListener(
-          "resize",
-          recomputeOnViewportChange
-        );
+        window.visualViewport.addEventListener("resize", onViewportChange); // ⬅️
       }
-      window.addEventListener("orientationchange", recomputeOnViewportChange);
+      window.addEventListener("orientationchange", onViewportChange); // ⬅️
 
       // ===== 初始化 =====
       show(0);
