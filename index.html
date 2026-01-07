@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.63</title>
+    <title>Ver 0.0.64</title>
     <style>
       html,
       body {
@@ -19,14 +19,14 @@
       .stage {
         position: fixed;
         inset: 0;
-        height: 100dvh;
+        height: 100dvh; /* 動態視窗高度，避免手機直立時 100vh 工具列誤差 */
         display: flex;
         align-items: center;
         justify-content: center;
         user-select: none;
         background: #000;
         overflow: hidden;
-        /* 🔒 移除 pinch-zoom，保留垂直捲動 */
+        /* 移除 pinch-zoom，scale>1 時由 JS 改為 none */
         touch-action: pan-y;
       }
       .slide {
@@ -38,7 +38,7 @@
         background: #000;
         will-change: transform;
         transform-origin: 0 0;
-        /* 🔒 移除 pinch-zoom */
+        /* 未縮放允許垂直捲動；縮放時由 JS 改為 none */
         touch-action: pan-y;
         backface-visibility: hidden;
       }
@@ -69,7 +69,9 @@
       <img id="viewer" class="slide" src="" alt="slide" draggable="false" />
     </div>
 
-    <div class="hint" id="hint">← → 鍵切換｜手機單擊或滑動可切換</div>
+    <div class="hint" id="hint">
+      ← → 鍵切換｜手機單擊或滑動可切換｜手機雙擊可放大
+    </div>
 
     <script>
       // ===== 設定 =====
@@ -80,29 +82,32 @@
         (_, i) => `${FOLDER}/${String(i + 1)}.PNG`
       );
 
-      const ENABLE_ZOOM = false; // 🔒 關閉縮放
-      const MIN_SCALE = 1;
-      const MAX_SCALE = ENABLE_ZOOM ? 6 : 1;
-      const DOUBLE_TAP_MS = 300;
-      const WHEEL_ZOOM_FACTOR = 1.1;
+      const MIN_SCALE = 1,
+        MAX_SCALE = 6;
+      const DOUBLE_TAP_MS = 300,
+        WHEEL_ZOOM_FACTOR = 1.1;
 
-      const EPS = 0.2;
+      const EPS = 0.2; // 邊界微緩衝，避免浮點造成黑邊
       const isTouchDevice = navigator.maxTouchPoints > 0;
 
-      const DOUBLE_TAP_TARGET_SCALE = 2;
-      const ZOOM_ANIM_MS = 220;
+      // 中心縮放（不跟游標）
+      const DOUBLE_TAP_TARGET_SCALE = 2; // 觸控雙擊放大目標倍數
+      const ZOOM_ANIM_MS = 220; // 雙擊縮放動畫時長
 
+      // Tap 閾值（手機較寬鬆）
       const CLICK_THRESHOLD_PX = isTouchDevice ? 22 : 10;
       const CLICK_THRESHOLD_PY = isTouchDevice ? 22 : 10;
       const TAP_DURATION_MS = 250;
 
+      // Swipe 閾值（距離 + 速度）
       const SWIPE_MIN_PX = isTouchDevice ? 48 : 36;
-      const SWIPE_MIN_VELOCITY = 0.35;
+      const SWIPE_MIN_VELOCITY = 0.35; // px/ms
 
-      const INERTIA_MIN_SPEED = 0.02;
-      const INERTIA_FRICTION = 0.5;
-      const BOUNCE_COEFF = 0.1;
-      const PAN_HISTORY_MS = 120;
+      // 慣性拖曳／反彈參數
+      const INERTIA_MIN_SPEED = 0.02; // px/ms，低於此速即停止
+      const INERTIA_FRICTION = 0.5; // 每幀速度衰減（~60fps）
+      const BOUNCE_COEFF = 0.1; // 觸邊反彈反射係數
+      const PAN_HISTORY_MS = 120; // 計算慣性速度的最後時間窗
 
       // ===== DOM =====
       const viewer = document.getElementById("viewer");
@@ -117,23 +122,28 @@
       let rafId = null,
         lastTap = 0;
 
+      // 快取舞台尺寸（用 visualViewport 為主）
       let viewportW = 0,
         viewportH = 0;
 
+      // 未縮放居中的左上角座標（快取）
       let baseW = 0,
         baseH = 0;
       let baseLx = 0,
         baseLy = 0;
 
+      // viewer 拖曳用
       const pointers = new Map();
       let dragStart = null;
 
+      // stage 拖曳用（scale>1）
       let stageDragStart = null;
 
-      // pinch 用錨點（圖片本地座標）—已不使用，但保留結構
+      // pinch 用錨點（圖片本地座標）—保留變數但不再使用
       let touchStartDist = 0;
       let touchAnchorP = { x: 0, y: 0 };
 
+      // Tap / Swipe（僅 scale===1 時啟用）
       let tapStartX = null,
         tapStartY = null,
         tapStartTime = 0;
@@ -141,12 +151,15 @@
         lastMoveY = null,
         lastMoveTime = 0;
 
+      // 防跳動：互動期間延後重算（debounce + 髒旗）
       let recomputeTimer = null,
         viewportDirty = false;
 
+      // 慣性拖曳
       let panAnimId = null;
-      let panHistory = [];
+      let panHistory = []; // {x, y, t}
 
+      // 雙擊平滑縮放動畫互斥
       let zoomAnimId = null;
 
       // ===== 工具 =====
@@ -201,7 +214,6 @@
         return { minTx, maxTx, minTy, maxTy };
       }
       function preventNativeIfZooming(e) {
-        // 🔒 再也不會 scale>1，但保留函式以兼容
         if (scale > 1) {
           e.preventDefault?.();
         }
@@ -236,9 +248,13 @@
       }
 
       function setInteractionMode() {
-        // 🔒 永久移除 pinch-zoom，保留垂直捲動（不依賴 scale）
-        viewer.style.touchAction = "pan-y";
-        stage.style.touchAction = "pan-y";
+        if (scale === 1) {
+          viewer.style.touchAction = "pan-y";
+          stage.style.touchAction = "pan-y";
+        } else {
+          viewer.style.touchAction = "none";
+          stage.style.touchAction = "none";
+        }
       }
 
       function resetTransform() {
@@ -248,7 +264,7 @@
         tx = 0;
         ty = 0;
         commit();
-        scheduleRecompute();
+        scheduleRecompute(); // 還原後允許重算
       }
 
       // ===== 顯示圖片 =====
@@ -266,23 +282,26 @@
         viewer.alt = `slide ${idx + 1}`;
         viewer.onload = () => {
           recomputeBaseSize();
-        };
+        }; // 載入完成立刻重算
         viewer.onerror = () => {
           hint.textContent = `載入失敗：${url}（點擊可跳下一張）`;
           hint.classList.remove("hidden");
         };
 
+        // 預載下一張（非阻塞）
         const pre = new Image();
         pre.decoding = "async";
         pre.src = images[(idx + 1) % images.length];
       }
 
+      // 左右半邊換頁（僅 scale===1）
       function handlePositionalClick(clientX) {
         if (scale !== 1) return;
         const leftHalf = clientX < viewportW / 2;
         show(leftHalf ? idx - 1 : idx + 1);
       }
 
+      // 縮放（以某 client 點為錨）
       function zoomAtPoint(targetScale, clientX, clientY) {
         const s1 = clamp(targetScale, MIN_SCALE, MAX_SCALE);
         const p = clientToImagePoint(clientX, clientY);
@@ -291,15 +310,17 @@
         scale = s1;
         commit(true);
       }
+
+      // 中心縮放（不跟游標）
       function zoomAtCenter(targetScale) {
         zoomAtPoint(targetScale, viewportW / 2, viewportH / 2);
       }
 
+      // 雙擊平滑縮放（觸控）
       function easeOutCubic(t) {
         return 1 - Math.pow(1 - t, 3);
       }
       function animateZoomAtCenter(targetScale, duration = ZOOM_ANIM_MS) {
-        // 🔒 雖保留函式以免其他呼叫錯誤，但 MAX_SCALE=1 使其無效
         stopZoomAnim();
         const startScale = scale;
         const cX = viewportW / 2,
@@ -329,7 +350,7 @@
         zoomAnimId = null;
       }
 
-      // ===== 慣性拖曳 =====
+      // 慣性拖曳（放手後滑動並反彈）
       function startPanInertia(vx, vy) {
         stopPanInertia();
         let lastTs = nowMs();
@@ -338,13 +359,16 @@
           const dt = Math.max(1, ts - lastTs);
           lastTs = ts;
 
+          // 速度衰減
           const decay = Math.pow(INERTIA_FRICTION, dt / 16);
           vx *= decay;
           vy *= decay;
 
+          // 位移更新
           tx += vx * dt;
           ty += vy * dt;
 
+          // 觸邊反彈（反射速度、位置貼齊邊界）
           const { minTx, maxTx, minTy, maxTy } = getPanBounds();
           if (tx < minTx && vx < 0) {
             tx = minTx;
@@ -363,8 +387,10 @@
             vy *= -BOUNCE_COEFF;
           }
 
+          // 視覺更新（靠反彈維持邊界）
           commit(false);
 
+          // 終止條件
           const small =
             Math.abs(vx) < INERTIA_MIN_SPEED &&
             Math.abs(vy) < INERTIA_MIN_SPEED;
@@ -399,7 +425,7 @@
         return { vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt };
       }
 
-      // ===== 防跳動 =====
+      // 防跳動：互動期間延後重算
       function isInteracting() {
         return (
           pointers.size > 0 ||
@@ -422,7 +448,7 @@
         if (viewportDirty && !isInteracting()) scheduleRecompute(120);
       }
 
-      // ===== Viewer：Pointer =====
+      // ===== Viewer：Pointer（只負責縮放/拖曳）=====
       viewer.addEventListener(
         "pointerdown",
         (e) => {
@@ -433,10 +459,22 @@
             type: e.pointerType,
           });
 
-          // 🔒 禁用觸控雙擊放大
+          if (scale > 1) {
+            try {
+              viewer.setPointerCapture(e.pointerId);
+            } catch {}
+          } else if (e.pointerType !== "touch") {
+            try {
+              viewer.setPointerCapture(e.pointerId);
+            } catch {}
+          }
+
+          // 觸控雙擊：未縮放放大；已縮放還原（桌面 mouse/pen 禁用）
           const tNow = nowMs();
           if (e.pointerType === "touch" && tNow - lastTap < DOUBLE_TAP_MS) {
+            animateZoomAtCenter(scale > 1 ? 1 : DOUBLE_TAP_TARGET_SCALE);
             lastTap = 0;
+            return;
           }
           lastTap = e.pointerType === "touch" ? tNow : 0;
 
@@ -448,7 +486,7 @@
               recordPanHistory(p.x, p.y);
             }
           } else if (pointers.size === 2) {
-            // 🔒 禁用雙指捏合放大：不執行任何縮放
+            // 禁用雙指捏合縮放：不設定錨點、不計算距離
             stopPanInertia();
           }
         },
@@ -467,6 +505,7 @@
             type: e.pointerType,
           });
 
+          // 禁用雙指捏合縮放；保留縮放後單指拖曳
           if (pointers.size === 1 && dragStart && scale > 1) {
             const cur = pointers.get(e.pointerId);
             tx = dragStart.tx0 + (cur.x - dragStart.x);
@@ -484,6 +523,7 @@
           viewer.releasePointerCapture(e.pointerId);
         } catch {}
         if (pointers.size === 0) {
+          // 慣性：單指拖曳結束後才進行
           if (dragStart && scale > 1) {
             const { vx, vy } = computePanVelocity();
             if (
@@ -528,7 +568,7 @@
             } catch {}
             return;
           }
-          if (e.buttons && e.buttons !== 1) return;
+          if (e.buttons && e.buttons !== 1) return; // 僅主鍵/觸控
           tapStartX = e.clientX;
           tapStartY = e.clientY;
           tapStartTime = nowMs();
@@ -577,6 +617,7 @@
           return;
         }
 
+        // scale===1：tap 或 swipe 換頁
         const endX = e.clientX,
           endY = e.clientY;
         const endTime = nowMs();
@@ -586,7 +627,7 @@
 
         const mvDt = Math.max(1, endTime - (lastMoveTime || endTime));
         const mvDx = endX - (lastMoveX ?? endX);
-        const velocityX = Math.abs(mvDx) / mvDt;
+        const velocityX = Math.abs(mvDx) / mvDt; // px/ms
 
         const absDx = Math.abs(dx),
           absDy = Math.abs(dy);
@@ -626,11 +667,18 @@
 
       stage.addEventListener("contextmenu", (e) => e.preventDefault());
 
-      // ===== 滾輪（縮放；永久禁用）=====
+      // ===== 滾輪（縮放；永久禁用平移）=====
       const onWheel = (e) => {
+        // Ctrl+滾輪：縮放（中心錨點）
         if (e.ctrlKey) {
-          e.preventDefault(); // 🔒 禁用 Ctrl+滾輪縮放
+          e.preventDefault();
+          const factor =
+            Math.sign(e.deltaY) > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR;
+          const target = clamp(scale * factor, MIN_SCALE, MAX_SCALE);
+          zoomAtCenter(target);
+          return;
         }
+        // 永久禁用滾輪平移：忽略
       };
       stage.addEventListener("wheel", onWheel, { passive: false });
 
@@ -655,14 +703,19 @@
         } else if (key.toLowerCase() === "r") {
           e.preventDefault();
           resetTransform();
+        } else if (key === "+" || key === "=") {
+          e.preventDefault();
+          zoomAtCenter(clamp(scale * WHEEL_ZOOM_FACTOR, MIN_SCALE, MAX_SCALE));
+        } else if (key === "-" || key === "_") {
+          e.preventDefault();
+          zoomAtCenter(clamp(scale / WHEEL_ZOOM_FACTOR, MIN_SCALE, MAX_SCALE));
         }
-        // 🔒 禁用 +/-：不做任何事
       });
 
       // ===== 舞台尺寸變更（排程）=====
       function onViewportChange() {
         viewportDirty = true;
-        scheduleRecompute();
+        scheduleRecompute(); // 互動中不重算，結束後再補
       }
       window.addEventListener("resize", onViewportChange);
       if (window.visualViewport) {
@@ -670,20 +723,8 @@
       }
       window.addEventListener("orientationchange", onViewportChange);
 
-      // 🔒 iOS Safari 的原生手勢縮放禁用
-      ["gesturestart", "gesturechange", "gestureend"].forEach((type) => {
-        window.addEventListener(
-          type,
-          (e) => {
-            e.preventDefault();
-          },
-          { passive: false }
-        );
-      });
-
       // ===== 初始化 =====
       show(0);
     </script>
   </body>
 </html>
-``
