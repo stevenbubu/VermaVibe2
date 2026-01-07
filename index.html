@@ -7,7 +7,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Ver 0.0.65</title>
+    <title>Ver 0.0.66</title>
     <style>
       html,
       body {
@@ -165,7 +165,7 @@
       // ===== 工具 =====
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: a.y + b.y });
+      const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
       const nowMs = () => performance.now();
 
       function updateViewport() {
